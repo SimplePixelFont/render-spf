@@ -1,0 +1,17 @@
+[package]
+name = "render_spf"
+version = "0.1.0"
+edition = "2021"
+description = ".spf (Simple Pixel Font) texture builder and printer crate."
+repository = "https://github.com/SimplePixelFont/render-spf"
+license = "Apache-2.0"
+
+[features]
+default = ["std"]
+std = ["dep:ril", "dep:hashbrown", "dep:bitvec"]
+
+[dependencies]
+bitvec = { version = "1.0.1", optional = true }
+spf = { git="https://github.com/SimplePixelFont/spf.rs.git", default-features = false}
+ril = { version = "0.10.3", default-features = false, features = ["png"], optional=true }
+hashbrown = {version="0.16.1", optional=true }
