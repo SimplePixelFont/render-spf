@@ -70,7 +70,7 @@ pub fn find_font<'a>(layout: &'a Layout, name: &str) -> Option<(&'a FontTable, &
 ///
 /// Color table population is handled separately by `generic_update_cache`
 /// via [`populate_color_control`] — builders only need to produce the glyph.
-pub(crate) trait TextureBuilder<T: RenderableTexture> {
+pub trait TextureBuilder<T: RenderableTexture> {
     fn build_texture(
         &self,
         character: &Character,
@@ -170,7 +170,7 @@ pub(crate) fn populate_color_control(
 /// | true  | false | explicit table + positional index |
 /// | false | true  | explicit pixmap index, search all dep tables |
 /// | false | false | fully implicit — both by position |
-pub(crate) fn generic_update_cache<K, T, B>(
+pub fn generic_update_cache<K, T, B>(
     font_table: &FontTable,
     font: &Font,
     layout: &Layout,

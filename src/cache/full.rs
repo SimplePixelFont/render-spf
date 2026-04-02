@@ -6,12 +6,12 @@ use ril::{Image, Rgba};
 use spf::core::{Character, Font, FontTable, Layout, Pixmap, PixmapTable};
 
 use crate::{
-    String, Vec,
     color::{ColorControl, PixelRef},
-    print::{GenericPrintConfig, RenderableTexture, RenderSurface},
+    print::{GenericPrintConfig, RenderSurface, RenderableTexture, VerticalAlign},
+    String, Vec,
 };
 
-use super::{FontCache, TextureBuilder, find_font, generic_update_cache};
+use super::{find_font, generic_update_cache, FontCache, TextureBuilder};
 
 /// A single full-colour glyph for `std` targets.
 ///
@@ -40,9 +40,15 @@ impl Default for AbstractCharacter {
 }
 
 impl RenderableTexture for AbstractCharacter {
-    fn width(&self) -> u32 { self.width }
-    fn height(&self) -> u32 { self.height }
-    fn advance_x(&self) -> u32 { self.advance_x }
+    fn width(&self) -> u32 {
+        self.width
+    }
+    fn height(&self) -> u32 {
+        self.height
+    }
+    fn advance_x(&self) -> u32 {
+        self.advance_x
+    }
 }
 
 // The generic RenderSurface impl is a safe no-op — the color-aware render
@@ -103,7 +109,8 @@ impl TextureBuilder<AbstractCharacter> for RgbaTextureBuilder {
         let dep_local_to_layout: Vec<u8> = pixmap_table
             .color_table_indexes
             .as_deref()
-            .unwrap_or(&[]).to_vec();
+            .unwrap_or(&[])
+            .to_vec();
 
         // Default layout-level index: first dependency color table, or 0.
         let default_layout_ct_idx = dep_local_to_layout.first().copied().unwrap_or(0);
@@ -120,8 +127,9 @@ impl TextureBuilder<AbstractCharacter> for RgbaTextureBuilder {
         // Build PixelRefs — resolve dep-local → layout-level for each pixel.
         let pixels: Vec<PixelRef> = palette_indices
             .iter()
-            .enumerate()
-            .map(|(_, &color_index)| { // rename _ -> i if you want to use the pixel index for per-pixel color tables
+            // .enumerate()
+            .map(/*|(_, &color_index)|*/|&color_index| {
+                // uncomment the enumerate and use dep_local if per-pixel indexes are present
                 // Per-pixel dep-local index, falling back to dep slot 0
 
                 let dep_local = 0;
@@ -144,7 +152,12 @@ impl TextureBuilder<AbstractCharacter> for RgbaTextureBuilder {
             })
             .collect();
 
-        AbstractCharacter { width, height, advance_x, pixels }
+        AbstractCharacter {
+            width,
+            height,
+            advance_x,
+            pixels,
+        }
     }
 }
 
@@ -173,12 +186,7 @@ impl CharacterCacheImpl {
     /// and populated for every color table referenced by the font's glyphs.
     /// Store this alongside the printer — it is the live palette used at
     /// render time.
-    pub fn update(
-        &mut self,
-        font_table: &FontTable,
-        font: &Font,
-        layout: &Layout,
-    ) -> ColorControl {
+    pub fn update(&mut self, font_table: &FontTable, font: &Font, layout: &Layout) -> ColorControl {
         // Pre-size to layout.color_tables.len() so every slot is addressable
         // by layout-level index from the start. Slots for color tables not
         // referenced by this font remain empty.
@@ -210,7 +218,9 @@ impl FontCache for CharacterCacheImpl {
         self.mappings.get(key)
     }
 
-    fn max_height(&self) -> u32 { self.max_height }
+    fn max_height(&self) -> u32 {
+        self.max_height
+    }
 }
 
 /// A printer for the full-colour std backend.
@@ -246,8 +256,16 @@ pub struct RgbaPrinter {
 }
 
 impl RgbaPrinter {
-    pub fn new(cache: CharacterCacheImpl, config: GenericPrintConfig, colors: ColorControl) -> Self {
-        Self { cache, config, colors }
+    pub fn new(
+        cache: CharacterCacheImpl,
+        config: GenericPrintConfig,
+        colors: ColorControl,
+    ) -> Self {
+        Self {
+            cache,
+            config,
+            colors,
+        }
     }
 
     /// Build an [`RgbaPrinter`] from a specific [`Font`].
@@ -290,42 +308,44 @@ impl RgbaPrinter {
 
         let last = keys.len() - 1;
 
-        // Pass 1 — measure
         let mut width: u32 = last as u32 * self.config.letter_spacing as u32;
         let mut height: u32 = 0;
 
         for (i, key) in keys.iter().enumerate() {
-            let glyph = self.cache.get(key).expect("character key not found in cache");
-            width += if i < last { glyph.advance_x } else { glyph.width };
+            let glyph = self
+                .cache
+                .get(key)
+                .expect("character key not found in cache");
+            width += if i < last {
+                glyph.advance_x
+            } else {
+                glyph.width
+            };
             height = height.max(glyph.height);
         }
 
-        let surface_height = if self.config.vertical_expand {
-            self.cache.max_height()
-        } else {
-            height
-        };
+        if self.config.vertical_expand {
+            height = self.cache.max_height();
+        }
 
         let offset_y: u32 = if self.config.vertical_expand {
             match self.config.vertical_align {
-                crate::print::VerticalAlign::Top => 0,
-                crate::print::VerticalAlign::Middle => {
-                    self.cache.max_height().saturating_sub(height) / 2
-                }
-                crate::print::VerticalAlign::Bottom => {
-                    self.cache.max_height().saturating_sub(height)
-                }
+                VerticalAlign::Top => 0,
+                VerticalAlign::Middle => self.cache.max_height().saturating_sub(height) / 2,
+                VerticalAlign::Bottom => self.cache.max_height().saturating_sub(height),
             }
         } else {
             0
         };
 
-        // Pass 2 — composite, resolving PixelRefs through ColorControl
-        let mut surface = Image::new(width, surface_height, Rgba::transparent());
+        let mut surface = Image::new(width, height, Rgba::transparent());
         let mut current_x: u32 = 0;
 
         for key in keys {
-            let glyph = self.cache.get(key).expect("character key not found in cache");
+            let glyph = self
+                .cache
+                .get(key)
+                .expect("character key not found in cache");
             self.paste_glyph(&mut surface, glyph, current_x, offset_y);
             current_x += glyph.advance_x + self.config.letter_spacing as u32;
         }
@@ -335,19 +355,15 @@ impl RgbaPrinter {
 
     /// Composite a single glyph onto `surface` at (x, y), resolving each
     /// [`PixelRef`] through [`self.colors`](Self::colors).
-    fn paste_glyph(
-        &self,
-        surface: &mut Image<Rgba>,
-        glyph: &AbstractCharacter,
-        x: u32,
-        y: u32,
-    ) {
+    fn paste_glyph(&self, surface: &mut Image<Rgba>, glyph: &AbstractCharacter, x: u32, y: u32) {
         for py in 0..glyph.height {
             for px in 0..glyph.width {
                 let pixel_idx = (py * glyph.width + px) as usize;
                 if let Some(&pixel_ref) = glyph.pixels.get(pixel_idx) {
                     let (r, g, b, a) = self.colors.resolve(pixel_ref);
-                    if a == 0 { continue; }
+                    if a == 0 {
+                        continue;
+                    }
                     let (dst_x, dst_y) = (x + px, y + py);
                     if dst_x < surface.width() && dst_y < surface.height() {
                         surface.set_pixel(dst_x, dst_y, Rgba { r, g, b, a });

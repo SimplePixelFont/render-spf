@@ -159,20 +159,21 @@ impl CharacterCacheU8 {
         let mut abstract_characters = Vec::with_capacity(layout.character_tables[0].characters.len());
         for (character, pixmap) in 
             layout.character_tables[0].characters.iter().zip(&pixmap_table.pixmaps) {
-            let mut abstract_character = AbstractCharacterU8::default();
+            let mut abstract_character = AbstractCharacterU8 {
+                width: pixmap_table.constant_width.or(pixmap.custom_width).unwrap(),
+                height: pixmap_table.constant_height.or(pixmap.custom_height).unwrap(),
+                ..Default::default()
+            };
 
-            abstract_character.width = pixmap_table.constant_width.or(pixmap.custom_width).unwrap();
-            abstract_character.height = pixmap_table.constant_height.or(pixmap.custom_height).unwrap();
             self.track_height(&abstract_character);
             abstract_character.advance_x = character
                 .advance_x
-                .or(Some(abstract_character.width))
-                .unwrap();
+                .unwrap_or(abstract_character.width);
 
             let mut bytes = pixmap.data.iter().map(|b| b.reverse_bits()).collect::<Vec<u8>>();
             bytes.shrink_to_fit();
             
-            let texture = BitmapU8::from_data(abstract_character.width.into(), abstract_character.height.into(), bytes).unwrap();
+            let texture = BitmapU8::from_data(abstract_character.width, abstract_character.height, bytes).unwrap();
             abstract_character.texture = texture;
 
             abstract_characters.push(abstract_character);
