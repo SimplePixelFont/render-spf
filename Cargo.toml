@@ -12,6 +12,6 @@ std = ["dep:ril", "dep:hashbrown", "dep:bitvec"]
 
 [dependencies]
 bitvec = { version = "1.0.1", optional = true }
-spf = { git="https://github.com/SimplePixelFont/spf.rs.git", default-features = false}
+spf = { version="0.8.0-alpha.0", default-features = false}
 ril = { version = "0.10.3", default-features = false, features = ["png"], optional=true }
 hashbrown = {version="0.16.1", optional=true }

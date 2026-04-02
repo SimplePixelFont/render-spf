@@ -1,13 +1,17 @@
 use spf::core::{Character, Font, FontTable, Layout, Pixmap, PixmapTable};
 
 use crate::{
-    Vec, vec,
+    Vec,
     Bitmap, BitmapU8, VecMap,
     print::{GenericPrintConfig, RenderableTexture, RenderSurface},
     utilities::compact_layout,
 };
-
-use super::{FontCache, Printer, TextureBuilder, find_font, generic_update_cache};
+ 
+use crate::color::ColorControl;
+use super::{
+    FontCache, Printer, TextureBuilder,
+    find_font, generic_update_cache,
+};
 
 /// A single glyph for embedded / `no_std` targets.
 ///
@@ -119,11 +123,15 @@ impl CharacterCacheU8 {
     /// `font_table` is the parent [`FontTable`] that owns `font` — needed
     /// for the double-indirection resolution of character table indexes.
     pub fn update(&mut self, font_table: &FontTable, font: &Font, layout: &Layout) {
+        // The embedded backend is monochrome — ColorControl is constructed
+        // to satisfy generic_update_cache's signature but immediately dropped.
+        let mut color_control = ColorControl::with_capacity(layout.color_tables.len());
         generic_update_cache(
             font_table,
             font,
             layout,
             &EmbeddedTextureBuilder,
+            &mut color_control,
             |grapheme| *grapheme.as_bytes().first().unwrap_or(&0),
             |key, glyph: AbstractCharacterU8| {
                 self.track_height(&glyph);

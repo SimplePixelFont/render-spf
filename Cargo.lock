@@ -167,8 +167,9 @@ checksum = "e320a6c5ad31d271ad523dcf3ad13e2767ad8b1cb8f047f75a8aeaf8da139da2"
 
 [[package]]
 name = "spf"
-version = "0.7.2"
-source = "git+https://github.com/SimplePixelFont/spf.rs.git#7aef89647fecf67ec356c080b2eb4d34bfe7e1e7"
+version = "0.8.0-alpha.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6bccaf4fb393365f78d361b1b33b3fadf6a93a6237265135151f9ccb11a2c9f8"
 
 [[package]]
 name = "tap"

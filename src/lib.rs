@@ -11,6 +11,8 @@ pub(crate) use std::vec;
 pub(crate) use std::vec::Vec;
 
 #[cfg(not(feature = "std"))]
+pub(crate) use alloc::string::String;
+#[cfg(not(feature = "std"))]
 pub(crate) use alloc::vec;
 #[cfg(not(feature = "std"))]
 pub(crate) use alloc::vec::Vec;
@@ -27,7 +29,13 @@ pub use utilities::*;
 pub mod print;
 pub use print::*;
 
+// color is std-only — the embedded backend is monochrome
+#[cfg(feature = "std")]
+pub mod color;
+#[cfg(feature = "std")]
+pub use color::{ColorControl, ColorEntry, ColorType, PixelRef};
+
 pub mod cache;
 pub use cache::{find_font, font_names, FontCache, Printer, EmbeddedPrinter};
 #[cfg(feature = "std")]
-pub use cache::{RgbaPrinter};
+pub use cache::RgbaPrinter;
