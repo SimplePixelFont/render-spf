@@ -122,7 +122,7 @@ impl ColorEntry {
 ///
 /// let image = printer.print_str("Hello");
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ColorControl {
     /// One `Vec<ColorEntry>` per layout-level color table.
     /// Indexed directly by layout color table index.
