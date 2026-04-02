@@ -133,7 +133,7 @@ pub struct ColorControl {
 impl ColorControl {
     /// Construct a `ColorControl` pre-sized to `layout_color_table_count` slots.
     /// Slots for color tables not referenced by the font remain empty.
-    pub(crate) fn with_capacity(layout_color_table_count: usize) -> Self {
+    pub fn with_capacity(layout_color_table_count: usize) -> Self {
         Self {
             tables: vec![Vec::new(); layout_color_table_count],
         }
