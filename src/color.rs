@@ -127,7 +127,7 @@ pub struct ColorControl {
     /// One `Vec<ColorEntry>` per layout-level color table.
     /// Indexed directly by layout color table index.
     /// Empty inner `Vec`s represent color tables not used by this font.
-    pub(crate) tables: Vec<Vec<ColorEntry>>,
+    pub tables: Vec<Vec<ColorEntry>>,
 }
 
 impl ColorControl {
