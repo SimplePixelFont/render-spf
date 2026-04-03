@@ -87,7 +87,7 @@ impl TextureBuilder<AbstractCharacter> for RgbaTextureBuilder {
         character: &Character,
         pixmap: &Pixmap,
         pixmap_table: &PixmapTable,
-        _layout: &Layout,
+        layout: &Layout,
     ) -> AbstractCharacter {
         let width = pixmap_table
             .constant_width
@@ -106,11 +106,10 @@ impl TextureBuilder<AbstractCharacter> for RgbaTextureBuilder {
 
         // The dep-local → layout-level mapping for color tables.
         // dep_local_to_layout[i] = layout-level index for dep slot i.
-        let dep_local_to_layout: Vec<u8> = pixmap_table
+        let dep_local_to_layout: &[u8] = pixmap_table
             .color_table_indexes
             .as_deref()
-            .unwrap_or(&[])
-            .to_vec();
+            .unwrap_or(&[]);
 
         // Default layout-level index: first dependency color table, or 0.
         let default_layout_ct_idx = dep_local_to_layout.first().copied().unwrap_or(0);
@@ -129,21 +128,28 @@ impl TextureBuilder<AbstractCharacter> for RgbaTextureBuilder {
             .iter()
             // .enumerate()
             .map(/*|(_, &color_index)|*/|&color_index| {
-                // uncomment the enumerate and use dep_local if per-pixel indexes are present
-                // Per-pixel dep-local index, falling back to dep slot 0
+                // uncomment the enumerate and else statement and map expression when per-pixel color tables are supported
 
-                let dep_local = 0;
-                // let dep_local = pixmap
-                //     .per_pixel_color_table_indexes
-                //     .as_ref()
-                //     .and_then(|v| v.get(i).copied())
-                //     .unwrap_or(0);
-
-                // Resolve dep-local → layout-level via pixmap table's index list
-                let layout_ct_idx = dep_local_to_layout
-                    .get(dep_local as usize)
-                    .copied()
-                    .unwrap_or(default_layout_ct_idx);
+                let layout_ct_idx = /*if let Some(per_pixel) = pixmap
+                    .per_pixel_color_table_indexes
+                    .as_ref()
+                {
+                    // Explicit dep-local table named per pixel — resolve directly
+                    let dep_local = per_pixel.get(i).copied().unwrap_or(0);
+                    dep_local_to_layout.get(dep_local as usize).copied()
+                        .unwrap_or(default_layout_ct_idx)
+                } else */{
+                    dep_local_to_layout
+                        .iter()
+                        .find(|&ct_idx| {
+                            layout.color_tables
+                                .get(*ct_idx as usize)
+                                .map(|t| (color_index as usize) < t.colors.len())
+                                .unwrap_or(false)
+                        })
+                        .copied()
+                        .unwrap_or(default_layout_ct_idx)
+                };
 
                 PixelRef {
                     color_table_index: layout_ct_idx,
