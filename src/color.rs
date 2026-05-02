@@ -263,7 +263,7 @@ impl ColorControl {
 ///
 /// Identical in memory to a `u16` (two `u8` fields, 2 bytes) but
 /// self-documenting and debuggable without bit manipulation.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PixelRef {
     /// Layout-level color table index. Direct index into
     /// [`ColorControl::tables`].
