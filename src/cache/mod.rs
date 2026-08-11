@@ -1,9 +1,11 @@
-use spf::core::{Character, Font, FontTable, Layout, Pixmap, PixmapTable};
+use spf::core::{
+    Character, CharacterTableModifierFlags, Font, FontTable, Layout, Pixmap, PixmapTable,
+};
 
 use crate::{
-    Vec,
     color::{ColorControl, ColorEntry, ColorType},
-    print::{GenericPrintConfig, RenderableTexture, RenderSurface, generic_print},
+    print::{generic_print, GenericPrintConfig, RenderSurface, RenderableTexture},
+    Vec,
 };
 
 mod embedded;
@@ -86,9 +88,9 @@ pub(crate) fn resolve_pixmap<'a>(
     index: usize,
     tables: &[&'a PixmapTable],
 ) -> Option<(&'a PixmapTable, &'a Pixmap)> {
-    tables.iter().find_map(|table| {
-        (index < table.pixmaps.len()).then(|| (*table, &table.pixmaps[index]))
-    })
+    tables
+        .iter()
+        .find_map(|table| (index < table.pixmaps.len()).then(|| (*table, &table.pixmaps[index])))
 }
 
 /// Fill [`ColorControl`] slots for each color table referenced by `pixmap_table`.
@@ -116,7 +118,12 @@ pub(crate) fn populate_color_control(
 
         // Already populated — two pixmap tables referencing the same layout
         // color table write identical data, so first write wins.
-        if color_control.tables.get(slot).map(|t| !t.is_empty()).unwrap_or(false) {
+        if color_control
+            .tables
+            .get(slot)
+            .map(|t| !t.is_empty())
+            .unwrap_or(false)
+        {
             continue;
         }
 
@@ -133,7 +140,7 @@ pub(crate) fn populate_color_control(
                         Some(spf::core::ColorType::Absolute) => ColorType::Absolute,
                         _ => ColorType::Dynamic,
                     };
-                    ColorEntry::new(color_type, color.r, color.g, color.b, alpha)
+                    ColorEntry::new(color_type, color.red, color.green, color.blue, alpha)
                 })
                 .collect();
 
@@ -187,7 +194,7 @@ pub fn generic_update_cache<K, T, B>(
         None => return,
     };
 
-    for font_local_idx in &font.character_table_indexes {
+    for font_local_idx in &font.linked_character_table_indexes {
         // Double indirection: font-local → table-local → layout
         let table_local_idx = match font_table_char_indexes.get(*font_local_idx as usize) {
             Some(i) => *i as usize,
@@ -212,20 +219,27 @@ pub fn generic_update_cache<K, T, B>(
 
         for (pos_index, character) in character_table.characters.iter().enumerate() {
             // Four-way pixmap resolution
-            let resolved = if character_table.use_pixmap_table_index
-                && character_table.use_pixmap_index
-            {
+            let resolved = if character_table.modifier_flags.contains(
+                CharacterTableModifierFlags::UsePixmapTableIndex
+                    | CharacterTableModifierFlags::UsePixmapIndex,
+            ) {
                 let pix_idx = character.pixmap_index.unwrap() as usize;
                 let tbl_idx = character.pixmap_table_index.unwrap() as usize;
-                dep_pixmap_tables.get(tbl_idx).and_then(|t| {
-                    (pix_idx < t.pixmaps.len()).then(|| (*t, &t.pixmaps[pix_idx]))
-                })
-            } else if character_table.use_pixmap_table_index {
+                dep_pixmap_tables
+                    .get(tbl_idx)
+                    .and_then(|t| (pix_idx < t.pixmaps.len()).then(|| (*t, &t.pixmaps[pix_idx])))
+            } else if character_table
+                .modifier_flags
+                .contains(CharacterTableModifierFlags::UsePixmapTableIndex)
+            {
                 let tbl_idx = character.pixmap_table_index.unwrap() as usize;
                 dep_pixmap_tables
                     .get(tbl_idx)
                     .and_then(|t| resolve_pixmap(pos_index, &[t]))
-            } else if character_table.use_pixmap_index {
+            } else if character_table
+                .modifier_flags
+                .contains(CharacterTableModifierFlags::UsePixmapIndex)
+            {
                 let pix_idx = character.pixmap_index.unwrap() as usize;
                 resolve_pixmap(pix_idx, &dep_pixmap_tables)
             } else {
@@ -236,7 +250,7 @@ pub fn generic_update_cache<K, T, B>(
                 populate_color_control(color_control, pixmap_table, layout);
 
                 let texture = builder.build_texture(character, pixmap, pixmap_table, layout);
-                let key = key_converter(&character.grapheme_cluster);
+                let key = key_converter(&character.code_points);
                 inserter(key, texture);
             }
         }
