@@ -6,7 +6,7 @@ use spf::core::Layout;
 pub fn compact_layout(layout: &mut Layout) {
     for table in &mut layout.character_tables {
         for character in &mut table.characters {
-            character.grapheme_cluster.shrink_to_fit();
+            character.code_points.shrink_to_fit();
         }
     }
 
@@ -24,7 +24,7 @@ pub fn compact_layout(layout: &mut Layout) {
         for font in &mut table.fonts {
             font.name.shrink_to_fit();
             font.author.shrink_to_fit();
-            font.character_table_indexes.shrink_to_fit();
+            font.linked_character_table_indexes.shrink_to_fit();
         }
     }
 

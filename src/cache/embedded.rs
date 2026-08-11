@@ -1,17 +1,13 @@
 use spf::core::{Character, Font, FontTable, Layout, Pixmap, PixmapTable};
 
 use crate::{
-    Vec,
-    Bitmap, BitmapU8, VecMap,
-    print::{GenericPrintConfig, RenderableTexture, RenderSurface},
+    print::{GenericPrintConfig, RenderSurface, RenderableTexture},
     utilities::compact_layout,
+    Bitmap, BitmapU8, Vec, VecMap,
 };
- 
+
+use super::{find_font, generic_update_cache, FontCache, Printer, TextureBuilder};
 use crate::color::ColorControl;
-use super::{
-    FontCache, Printer, TextureBuilder,
-    find_font, generic_update_cache,
-};
 
 /// A single glyph for embedded / `no_std` targets.
 ///
@@ -40,9 +36,15 @@ impl Default for AbstractCharacterU8 {
 
 impl RenderableTexture for AbstractCharacterU8 {
     // Stored as u8, widened to u32 at the trait boundary.
-    fn width(&self) -> u32 { self.width as u32 }
-    fn height(&self) -> u32 { self.height as u32 }
-    fn advance_x(&self) -> u32 { self.advance_x as u32 }
+    fn width(&self) -> u32 {
+        self.width as u32
+    }
+    fn height(&self) -> u32 {
+        self.height as u32
+    }
+    fn advance_x(&self) -> u32 {
+        self.advance_x as u32
+    }
 }
 
 /// [`Bitmap`] is the rendering surface for the embedded backend.
@@ -91,7 +93,12 @@ impl TextureBuilder<AbstractCharacterU8> for EmbeddedTextureBuilder {
         let texture = BitmapU8::from_data(width, height, bytes)
             .expect("pixmap data length does not match declared dimensions");
 
-        AbstractCharacterU8 { width, height, advance_x, texture }
+        AbstractCharacterU8 {
+            width,
+            height,
+            advance_x,
+            texture,
+        }
     }
 }
 
@@ -147,7 +154,7 @@ impl CharacterCacheU8 {
     /// and freed in full before this method returns.
     ///
     /// This method will update the cache with characters and pixmaps only
-    /// from the first table in the layout's `character_tables` and 
+    /// from the first table in the layout's `character_tables` and
     /// `pixmap_tables`, zipping them together.
     ///
     /// Use instead of [`update`](Self::update) when heap is tight.
@@ -156,24 +163,35 @@ impl CharacterCacheU8 {
         compact_layout(&mut layout);
 
         let pixmap_table = &layout.pixmap_tables[0];
-        let mut abstract_characters = Vec::with_capacity(layout.character_tables[0].characters.len());
-        for (character, pixmap) in 
-            layout.character_tables[0].characters.iter().zip(&pixmap_table.pixmaps) {
+        let mut abstract_characters =
+            Vec::with_capacity(layout.character_tables[0].characters.len());
+        for (character, pixmap) in layout.character_tables[0]
+            .characters
+            .iter()
+            .zip(&pixmap_table.pixmaps)
+        {
             let mut abstract_character = AbstractCharacterU8 {
                 width: pixmap_table.constant_width.or(pixmap.custom_width).unwrap(),
-                height: pixmap_table.constant_height.or(pixmap.custom_height).unwrap(),
+                height: pixmap_table
+                    .constant_height
+                    .or(pixmap.custom_height)
+                    .unwrap(),
                 ..Default::default()
             };
 
             self.track_height(&abstract_character);
-            abstract_character.advance_x = character
-                .advance_x
-                .unwrap_or(abstract_character.width);
+            abstract_character.advance_x = character.advance_x.unwrap_or(abstract_character.width);
 
-            let mut bytes = pixmap.data.iter().map(|b| b.reverse_bits()).collect::<Vec<u8>>();
+            let mut bytes = pixmap
+                .data
+                .iter()
+                .map(|b| b.reverse_bits())
+                .collect::<Vec<u8>>();
             bytes.shrink_to_fit();
-            
-            let texture = BitmapU8::from_data(abstract_character.width, abstract_character.height, bytes).unwrap();
+
+            let texture =
+                BitmapU8::from_data(abstract_character.width, abstract_character.height, bytes)
+                    .unwrap();
             abstract_character.texture = texture;
 
             abstract_characters.push(abstract_character);
@@ -190,14 +208,17 @@ impl CharacterCacheU8 {
 
         let mut characters = vec![];
         for character in character_table.characters.iter_mut() {
-            let character = core::mem::take(&mut character.grapheme_cluster);
+            let character = core::mem::take(&mut character.code_points);
             characters.push(character.as_bytes()[0]);
         }
 
         characters.shrink_to_fit();
         abstract_characters.shrink_to_fit();
 
-        self.mappings = VecMap { keys: characters, values: abstract_characters };
+        self.mappings = VecMap {
+            keys: characters,
+            values: abstract_characters,
+        };
     }
 }
 
@@ -210,7 +231,9 @@ impl FontCache for CharacterCacheU8 {
         self.mappings.get(key)
     }
 
-    fn max_height(&self) -> u32 { self.max_height }
+    fn max_height(&self) -> u32 {
+        self.max_height
+    }
 }
 
 /// A [`Printer`] pre-configured for the embedded backend.
@@ -266,10 +289,7 @@ impl EmbeddedPrinter {
     /// heap usage. Selects the font by table/font index.
     ///
     /// Use instead of [`from_font`](Self::from_font) when heap is tight.
-    pub fn from_font_low_memory(
-        layout: Layout,
-        config: GenericPrintConfig,
-    ) -> Self {
+    pub fn from_font_low_memory(layout: Layout, config: GenericPrintConfig) -> Self {
         let mut cache = CharacterCacheU8::new();
         cache.low_memory_zipped_update(layout);
         Self::new(cache, config)
