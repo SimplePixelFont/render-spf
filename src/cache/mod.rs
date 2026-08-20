@@ -17,7 +17,10 @@ mod full;
 pub use full::*;
 
 pub trait FontCache {
-    type Key;
+    /// Cloned into each [`PlacedGlyph`](crate::print::PlacedGlyph) so a
+    /// [`Placement`](crate::print::Placement) can be looked back up against
+    /// the cache without borrowing the original key slice.
+    type Key: Clone;
     type Glyph: RenderableTexture;
     type Surface: RenderSurface<Self::Glyph>;
 

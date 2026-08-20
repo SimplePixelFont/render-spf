@@ -1,4 +1,5 @@
 use crate::cache::FontCache;
+use crate::Vec;
 
 /// A single character glyph that can be rendered onto a [`RenderSurface`].
 ///
@@ -47,17 +48,63 @@ pub struct GenericPrintConfig {
     pub vertical_align: VerticalAlign,
 }
 
-/// Core rasterisation loop. the public For ergonomics use [`Printer::print`](crate::cache::Printer::print).
-pub fn generic_print<C>(
-    keys: &[C::Key],
-    config: &GenericPrintConfig,
-    cache: &C,
-) -> C::Surface
+/// A single glyph's computed position within a [`Placement`], produced by
+/// [`layout`]. `width`/`height`/`advance_x` are copied from the glyph at
+/// layout time, so a `Placement` fully describes a run without requiring a
+/// second cache lookup just to know a glyph's extent.
+#[derive(Clone, Debug)]
+pub struct PlacedGlyph<K> {
+    /// The cache key this placement was computed from — look this back up
+    /// via [`FontCache::get`] to retrieve the actual glyph to paint.
+    pub key: K,
+    pub dst_x: u32,
+    pub dst_y: u32,
+    pub width: u32,
+    pub height: u32,
+    pub advance_x: u32,
+}
+
+/// The fully-computed layout of a run of glyphs, before rasterisation.
+///
+/// Produced by [`layout`], consumed by [`generic_print`] and by
+/// [`RgbaPrinter::render`](crate::cache::RgbaPrinter::render) — the seam
+/// that decouples "where does each glyph go" (this struct) from "how is a
+/// glyph's texture painted" (each backend's own paste step). A color-aware
+/// backend that can't use the generic [`RenderSurface::paste`] no-op still
+/// gets the layout math for free instead of re-deriving it.
+///
+/// `K` is generic over [`FontCache::Key`] rather than a fixed glyph-id type,
+/// since no shaping stage exists yet to produce one — today `K` is `String`
+/// (std backend) or `u8` (embedded backend).
+#[derive(Clone, Debug)]
+pub struct Placement<K> {
+    pub width: u32,
+    pub height: u32,
+    pub glyphs: Vec<PlacedGlyph<K>>,
+}
+
+/// Core layout pass: computes glyph positions without touching a surface.
+///
+/// Shared by every backend so the width/height/vertical-alignment math
+/// exists in exactly one place.
+///
+/// NOTE: this preserves the pre-existing `vertical_align` bug verbatim —
+/// `offset_y` is computed from `height` *after* `height` has already been
+/// reassigned to `cache.max_height()`, so `Middle`/`Bottom` always yield 0.
+/// This function is a pure extraction of the two previously-duplicated
+/// copies of this logic; the fix lands as a separate, independently
+/// verified change. See `spf-engine-phase0-results.md` / the engine plan's
+/// Phase 2.2 for the real formula.
+pub fn layout<C>(keys: &[C::Key], config: &GenericPrintConfig, cache: &C) -> Placement<C::Key>
 where
     C: FontCache,
 {
     if keys.is_empty() {
-        return C::Surface::new(0, 0);
+        return Placement {
+            width: 0,
+            height: 0,
+            glyphs: Vec::new(),
+        };
     }
 
     let last = keys.len() - 1;
@@ -84,13 +131,41 @@ where
         0
     };
 
-    let mut surface = C::Surface::new(width, height);
+    let mut glyphs = Vec::with_capacity(keys.len());
     let mut current_x: u32 = 0;
-
     for key in keys {
         let glyph = cache.get(key).expect("character key not found in cache");
-        surface.paste(current_x, offset_y, glyph);
+        glyphs.push(PlacedGlyph {
+            key: key.clone(),
+            dst_x: current_x,
+            dst_y: offset_y,
+            width: glyph.width(),
+            height: glyph.height(),
+            advance_x: glyph.advance_x(),
+        });
         current_x += glyph.advance_x() + config.letter_spacing as u32;
+    }
+
+    Placement {
+        width,
+        height,
+        glyphs,
+    }
+}
+
+/// Core rasterisation loop. For ergonomics use [`Printer::print`](crate::cache::Printer::print).
+pub fn generic_print<C>(keys: &[C::Key], config: &GenericPrintConfig, cache: &C) -> C::Surface
+where
+    C: FontCache,
+{
+    let placement = layout(keys, config, cache);
+    let mut surface = C::Surface::new(placement.width, placement.height);
+
+    for placed in &placement.glyphs {
+        let glyph = cache
+            .get(&placed.key)
+            .expect("character key not found in cache");
+        surface.paste(placed.dst_x, placed.dst_y, glyph);
     }
 
     surface

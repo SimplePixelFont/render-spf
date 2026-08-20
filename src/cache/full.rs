@@ -7,7 +7,7 @@ use spf::core::{Character, Font, FontTable, Layout, Pixmap, PixmapTable};
 
 use crate::{
     color::{ColorControl, PixelRef},
-    print::{GenericPrintConfig, RenderSurface, RenderableTexture, VerticalAlign},
+    print::{layout, GenericPrintConfig, RenderSurface, RenderableTexture},
     String, Vec,
 };
 
@@ -308,52 +308,15 @@ impl RgbaPrinter {
 
     /// Rasterise a pre-built key slice onto a new [`Image<Rgba>`].
     pub fn render(&self, keys: &[String]) -> Image<Rgba> {
-        if keys.is_empty() {
-            return Image::new(0, 0, Rgba::transparent());
-        }
+        let placement = layout(keys, &self.config, &self.cache);
+        let mut surface = Image::new(placement.width, placement.height, Rgba::transparent());
 
-        let last = keys.len() - 1;
-
-        let mut width: u32 = last as u32 * self.config.letter_spacing as u32;
-        let mut height: u32 = 0;
-
-        for (i, key) in keys.iter().enumerate() {
+        for placed in &placement.glyphs {
             let glyph = self
                 .cache
-                .get(key)
+                .get(&placed.key)
                 .expect("character key not found in cache");
-            width += if i < last {
-                glyph.advance_x
-            } else {
-                glyph.width
-            };
-            height = height.max(glyph.height);
-        }
-
-        if self.config.vertical_expand {
-            height = self.cache.max_height();
-        }
-
-        let offset_y: u32 = if self.config.vertical_expand {
-            match self.config.vertical_align {
-                VerticalAlign::Top => 0,
-                VerticalAlign::Middle => self.cache.max_height().saturating_sub(height) / 2,
-                VerticalAlign::Bottom => self.cache.max_height().saturating_sub(height),
-            }
-        } else {
-            0
-        };
-
-        let mut surface = Image::new(width, height, Rgba::transparent());
-        let mut current_x: u32 = 0;
-
-        for key in keys {
-            let glyph = self
-                .cache
-                .get(key)
-                .expect("character key not found in cache");
-            self.paste_glyph(&mut surface, glyph, current_x, offset_y);
-            current_x += glyph.advance_x + self.config.letter_spacing as u32;
+            self.paste_glyph(&mut surface, glyph, placed.dst_x, placed.dst_y);
         }
 
         surface
