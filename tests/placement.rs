@@ -247,7 +247,7 @@ fn std_and_embedded_backends_agree_on_placement() {
 #[test]
 fn render_surface_matches_placement_dimensions() {
     let layout_data = build_test_layout();
-    let printer =
+    let mut printer =
         RgbaPrinter::from_font_named("Test", &layout_data, config(true, VerticalAlign::Top))
             .unwrap();
     let keys = vec!["A".to_string(), "B".to_string()];

@@ -301,42 +301,52 @@ impl RgbaPrinter {
 
     /// Rasterise `text` onto a new [`Image<Rgba>`], resolving pixel colors
     /// through the current state of [`self.colors`](Self::colors).
-    pub fn print_str(&self, text: &str) -> Image<Rgba> {
+    ///
+    /// Takes `&mut self`: [`ColorControl::resolve`] rebuilds its render-time
+    /// cache in place when the palette has changed since the last call.
+    pub fn print_str(&mut self, text: &str) -> Image<Rgba> {
         let keys: Vec<String> = text.chars().map(|c| c.to_string()).collect();
         self.render(&keys)
     }
 
     /// Rasterise a pre-built key slice onto a new [`Image<Rgba>`].
-    pub fn render(&self, keys: &[String]) -> Image<Rgba> {
+    pub fn render(&mut self, keys: &[String]) -> Image<Rgba> {
         let placement = layout(keys, &self.config, &self.cache);
         let mut surface = Image::new(placement.width, placement.height, Rgba::transparent());
 
         for placed in &placement.glyphs {
+            // Disjoint field borrows: self.cache immutably (for glyph) and
+            // self.colors mutably (for paste_glyph), side by side. paste_glyph
+            // takes colors as an explicit parameter rather than &mut self so
+            // the borrow checker sees these as the separate fields they are,
+            // instead of two competing borrows of the whole RgbaPrinter.
             let glyph = self
                 .cache
                 .get(&placed.key)
                 .expect("character key not found in cache");
-            self.paste_glyph(&mut surface, glyph, placed.dst_x, placed.dst_y);
+            paste_glyph(&mut self.colors, &mut surface, glyph, placed.dst_x, placed.dst_y);
         }
 
         surface
     }
+}
 
-    /// Composite a single glyph onto `surface` at (x, y), resolving each
-    /// [`PixelRef`] through [`self.colors`](Self::colors).
-    fn paste_glyph(&self, surface: &mut Image<Rgba>, glyph: &AbstractCharacter, x: u32, y: u32) {
-        for py in 0..glyph.height {
-            for px in 0..glyph.width {
-                let pixel_idx = (py * glyph.width + px) as usize;
-                if let Some(&pixel_ref) = glyph.pixels.get(pixel_idx) {
-                    let (r, g, b, a) = self.colors.resolve(pixel_ref);
-                    if a == 0 {
-                        continue;
-                    }
-                    let (dst_x, dst_y) = (x + px, y + py);
-                    if dst_x < surface.width() && dst_y < surface.height() {
-                        surface.set_pixel(dst_x, dst_y, Rgba { r, g, b, a });
-                    }
+/// Composite a single glyph onto `surface` at (x, y), resolving each
+/// [`PixelRef`] through `colors`. A free function (not an `RgbaPrinter`
+/// method) so callers can borrow it disjointly from `self.cache` — see
+/// [`RgbaPrinter::render`].
+fn paste_glyph(colors: &mut ColorControl, surface: &mut Image<Rgba>, glyph: &AbstractCharacter, x: u32, y: u32) {
+    for py in 0..glyph.height {
+        for px in 0..glyph.width {
+            let pixel_idx = (py * glyph.width + px) as usize;
+            if let Some(&pixel_ref) = glyph.pixels.get(pixel_idx) {
+                let (r, g, b, a) = colors.resolve(pixel_ref);
+                if a == 0 {
+                    continue;
+                }
+                let (dst_x, dst_y) = (x + px, y + py);
+                if dst_x < surface.width() && dst_y < surface.height() {
+                    surface.set_pixel(dst_x, dst_y, Rgba { r, g, b, a });
                 }
             }
         }

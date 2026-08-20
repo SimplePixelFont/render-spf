@@ -1,5 +1,4 @@
 use crate::{vec, Vec};
-use core::cell::{Cell, RefCell};
 
 // ---------------------------------------------------------------------------
 // ColorType
@@ -143,16 +142,21 @@ pub struct ColorControl {
 
     /// Render-time cache, rebuilt lazily on the next [`resolve`](Self::resolve)
     /// call after [`dirty`](Self::dirty) is set. See [`FlatPalette`].
-    flat: RefCell<FlatPalette>,
-    dirty: Cell<bool>,
+    ///
+    /// Plain fields, not interior mutability: `resolve` takes `&mut self`
+    /// instead. `Cell`/`RefCell` are `!Sync`, which would make `ColorControl`
+    /// (and so `RgbaPrinter`) unusable inside a `static ... RwLock<...>`
+    /// font registry — exactly how web-spf stores printers.
+    flat: FlatPalette,
+    dirty: bool,
 }
 
 impl Default for ColorControl {
     fn default() -> Self {
         Self {
             tables: Vec::new(),
-            flat: RefCell::new(FlatPalette::default()),
-            dirty: Cell::new(true),
+            flat: FlatPalette::default(),
+            dirty: true,
         }
     }
 }
@@ -163,8 +167,8 @@ impl ColorControl {
     pub fn with_capacity(layout_color_table_count: usize) -> Self {
         Self {
             tables: vec![Vec::new(); layout_color_table_count],
-            flat: RefCell::new(FlatPalette::default()),
-            dirty: Cell::new(true),
+            flat: FlatPalette::default(),
+            dirty: true,
         }
     }
 
@@ -181,7 +185,7 @@ impl ColorControl {
             entry.g = g;
             entry.b = b;
             entry.a = a;
-            self.dirty.set(true);
+            self.dirty = true;
         }
     }
 
@@ -193,7 +197,7 @@ impl ColorControl {
             entry.g = entry.original_g;
             entry.b = entry.original_b;
             entry.a = entry.original_a;
-            self.dirty.set(true);
+            self.dirty = true;
         }
     }
 
@@ -212,7 +216,7 @@ impl ColorControl {
                 }
             }
         }
-        self.dirty.set(true);
+        self.dirty = true;
     }
 
     /// Reset all entries (Dynamic and Absolute) to their original values.
@@ -225,7 +229,7 @@ impl ColorControl {
                 entry.a = entry.original_a;
             }
         }
-        self.dirty.set(true);
+        self.dirty = true;
     }
 
     /// Iterate [`Dynamic`](ColorType::Dynamic) entries in a layout-level
@@ -264,15 +268,17 @@ impl ColorControl {
     /// from the [`FlatPalette`] render-time cache, rebuilt here on first
     /// use after any of [`set`](Self::set)/[`reset`](Self::reset)/
     /// [`reset_dynamic`](Self::reset_dynamic)/[`reset_all`](Self::reset_all)
-    /// — not on every call, and not per-pixel.
+    /// — not on every call, and not per-pixel. Takes `&mut self` (plain
+    /// fields, not interior mutability) purely so the cache can be
+    /// rebuilt in place — see the note on [`flat`](Self::flat)'s field docs.
     /// Returns transparent black for out-of-range references rather than panicking.
     #[inline]
-    pub(crate) fn resolve(&self, pixel: PixelRef) -> (u8, u8, u8, u8) {
-        if self.dirty.get() {
-            *self.flat.borrow_mut() = FlatPalette::rebuild(&self.tables);
-            self.dirty.set(false);
+    pub(crate) fn resolve(&mut self, pixel: PixelRef) -> (u8, u8, u8, u8) {
+        if self.dirty {
+            self.flat = FlatPalette::rebuild(&self.tables);
+            self.dirty = false;
         }
-        self.flat.borrow().resolve(pixel)
+        self.flat.resolve(pixel)
     }
 }
 
@@ -403,7 +409,7 @@ mod tests {
 
     #[test]
     fn flat_palette_matches_nested_resolution_across_tables() {
-        let control = two_table_control();
+        let mut control = two_table_control();
         assert_eq!(
             control.resolve(PixelRef { color_table_index: 0, color_index: 0 }),
             (255, 0, 0, 255)
@@ -425,7 +431,7 @@ mod tests {
 
     #[test]
     fn flat_palette_out_of_range_returns_transparent_black() {
-        let control = two_table_control();
+        let mut control = two_table_control();
         // Out-of-range index within a valid table.
         assert_eq!(
             control.resolve(PixelRef { color_table_index: 0, color_index: 5 }),
@@ -440,25 +446,25 @@ mod tests {
 
     #[test]
     fn dirty_flag_starts_true_and_clears_after_first_resolve() {
-        let control = two_table_control();
-        assert!(control.dirty.get());
+        let mut control = two_table_control();
+        assert!(control.dirty);
         control.resolve(PixelRef { color_table_index: 0, color_index: 0 });
-        assert!(!control.dirty.get());
+        assert!(!control.dirty);
     }
 
     #[test]
     fn set_marks_dirty_and_is_reflected_on_next_resolve() {
         let mut control = two_table_control();
         control.resolve(PixelRef { color_table_index: 0, color_index: 0 }); // warm the cache
-        assert!(!control.dirty.get());
+        assert!(!control.dirty);
 
         control.set(0, 0, 9, 9, 9, 9);
-        assert!(control.dirty.get());
+        assert!(control.dirty);
         assert_eq!(
             control.resolve(PixelRef { color_table_index: 0, color_index: 0 }),
             (9, 9, 9, 9)
         );
-        assert!(!control.dirty.get());
+        assert!(!control.dirty);
     }
 
     #[test]
