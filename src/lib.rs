@@ -29,6 +29,9 @@ pub use utilities::*;
 pub mod print;
 pub use print::*;
 
+pub mod shape;
+pub use shape::*;
+
 // Not std-gated: generic_update_cache requires a &mut ColorControl for both
 // backends (the embedded/no_std one discards it immediately — it's
 // monochrome — but still needs the type available to satisfy the shared
