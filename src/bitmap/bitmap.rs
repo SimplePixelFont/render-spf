@@ -44,7 +44,7 @@ impl PasteSource for BitmapU8 {
 impl Bitmap {
     /// Create a new bitmap with all pixels cleared to 0 (transparent).
     pub fn new(width: usize, height: usize) -> Self {
-        let bytes_per_row = (width + 7) / 8;
+        let bytes_per_row = width.div_ceil(8);
         Self { width, height, data: vec![0u8; bytes_per_row * height] }
     }
 
@@ -53,7 +53,7 @@ impl Bitmap {
     /// `data` must be row-major with each row padded to the nearest byte
     /// boundary. The MSB of the first byte is the top-left pixel.
     pub fn from_data(width: usize, height: usize, data: Vec<u8>) -> Result<Self, &'static str> {
-        let expected = ((width + 7) / 8) * height;
+        let expected = width.div_ceil(8) * height;
         if data.len() != expected {
             return Err("Data length doesn't match dimensions");
         }
@@ -66,7 +66,7 @@ impl Bitmap {
 
     #[inline]
     fn bytes_per_row(&self) -> usize {
-        (self.width + 7) / 8
+        self.width.div_ceil(8)
     }
 
     /// Set a pixel at (x, y). Returns `false` if out of bounds.
