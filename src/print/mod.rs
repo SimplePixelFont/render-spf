@@ -88,13 +88,17 @@ pub struct Placement<K> {
 /// Shared by every backend so the width/height/vertical-alignment math
 /// exists in exactly one place.
 ///
-/// NOTE: this preserves the pre-existing `vertical_align` bug verbatim —
-/// `offset_y` is computed from `height` *after* `height` has already been
-/// reassigned to `cache.max_height()`, so `Middle`/`Bottom` always yield 0.
-/// This function is a pure extraction of the two previously-duplicated
-/// copies of this logic; the fix lands as a separate, independently
-/// verified change. See `spf-engine-phase0-results.md` / the engine plan's
-/// Phase 2.2 for the real formula.
+/// `offset_y` is computed from this run's own tallest glyph
+/// (`natural_height`), not from the (possibly taller) surface height —
+/// `vertical_expand` only changes how tall the *surface* is, not what "no
+/// offset" means. The previous implementation computed `offset_y` from
+/// `height` after `height` had already been reassigned to
+/// `cache.max_height()`, which made `Middle`/`Bottom` always yield 0.
+///
+/// Note this computes one `offset_y` for the whole run — glyphs of
+/// differing heights within the run share a top offset (block alignment)
+/// rather than being individually centred. SPF has no baseline concept,
+/// so this is the deliberate choice, not an oversight.
 pub fn layout<C>(keys: &[C::Key], config: &GenericPrintConfig, cache: &C) -> Placement<C::Key>
 where
     C: FontCache,
@@ -109,23 +113,25 @@ where
 
     let last = keys.len() - 1;
     let mut width: u32 = last as u32 * config.letter_spacing as u32;
-    let mut height: u32 = 0;
+    let mut natural_height: u32 = 0;
 
     for (i, key) in keys.iter().enumerate() {
         let glyph = cache.get(key).expect("character key not found in cache");
         width += if i < last { glyph.advance_x() } else { glyph.width() };
-        height = height.max(glyph.height());
+        natural_height = natural_height.max(glyph.height());
     }
 
-    if config.vertical_expand {
-        height = cache.max_height();
-    }
+    let height = if config.vertical_expand {
+        cache.max_height()
+    } else {
+        natural_height
+    };
 
     let offset_y: u32 = if config.vertical_expand {
         match config.vertical_align {
             VerticalAlign::Top => 0,
-            VerticalAlign::Middle => cache.max_height().saturating_sub(height) / 2,
-            VerticalAlign::Bottom => cache.max_height().saturating_sub(height),
+            VerticalAlign::Middle => height.saturating_sub(natural_height) / 2,
+            VerticalAlign::Bottom => height.saturating_sub(natural_height),
         }
     } else {
         0

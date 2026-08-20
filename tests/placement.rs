@@ -152,26 +152,54 @@ fn vertical_expand_true_top_align_is_always_zero_offset() {
 }
 
 // ---------------------------------------------------------------------
-// Known bug (documented, not yet fixed): Middle/Bottom + vertical_expand
-// always yield offset_y = 0, even when the run's natural height is
-// shorter than the surface (cache.max_height()). Fixed in Phase 2.2 --
-// this test is replaced there with the corrected expectation.
+// vertical_align Middle/Bottom (Phase 2.2 fix): offset_y is computed from
+// the run's own natural height, not from the (possibly taller) surface
+// height, so a short run within a taller cached font is actually shifted.
 // ---------------------------------------------------------------------
 
 #[test]
-fn known_bug_vertical_align_middle_bottom_collapse_to_zero_offset() {
+fn vertical_align_middle_offsets_by_half_the_height_difference() {
     let layout = build_test_layout();
     // "A","B" only: natural height 8, surface height (max_height) 10.
-    // Correct Middle offset would be (10-8)/2=1, Bottom would be 10-8=2.
-    // The current implementation yields 0 for both.
-    for align in [VerticalAlign::Middle, VerticalAlign::Bottom] {
+    let printer =
+        RgbaPrinter::from_font_named("Test", &layout, config(true, VerticalAlign::Middle))
+            .unwrap();
+    let keys = vec!["A".to_string(), "B".to_string()];
+    let placement = render_spf::layout(&keys, &printer.config, &printer.cache);
+    assert_eq!(placement.height, 10);
+    for glyph in &placement.glyphs {
+        assert_eq!(glyph.dst_y, 1); // (10 - 8) / 2
+    }
+}
+
+#[test]
+fn vertical_align_bottom_offsets_by_the_full_height_difference() {
+    let layout = build_test_layout();
+    // "A","B" only: natural height 8, surface height (max_height) 10.
+    let printer =
+        RgbaPrinter::from_font_named("Test", &layout, config(true, VerticalAlign::Bottom))
+            .unwrap();
+    let keys = vec!["A".to_string(), "B".to_string()];
+    let placement = render_spf::layout(&keys, &printer.config, &printer.cache);
+    assert_eq!(placement.height, 10);
+    for glyph in &placement.glyphs {
+        assert_eq!(glyph.dst_y, 2); // 10 - 8
+    }
+}
+
+#[test]
+fn vertical_align_middle_bottom_agree_with_top_when_run_reaches_max_height() {
+    let layout = build_test_layout();
+    // Including "C" (height 10) makes natural_height == cache.max_height(),
+    // so every alignment should agree: offset_y = 0.
+    for align in [VerticalAlign::Top, VerticalAlign::Middle, VerticalAlign::Bottom] {
         let printer =
             RgbaPrinter::from_font_named("Test", &layout, config(true, align)).unwrap();
-        let keys = vec!["A".to_string(), "B".to_string()];
+        let keys = vec!["A".to_string(), "C".to_string()];
         let placement = render_spf::layout(&keys, &printer.config, &printer.cache);
         assert_eq!(placement.height, 10);
         for glyph in &placement.glyphs {
-            assert_eq!(glyph.dst_y, 0, "bug: offset_y should be wrong (0) pre-Phase-2.2");
+            assert_eq!(glyph.dst_y, 0);
         }
     }
 }
