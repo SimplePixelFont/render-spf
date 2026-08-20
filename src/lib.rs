@@ -42,4 +42,4 @@ pub use color::{ColorControl, ColorEntry, ColorType, PixelRef};
 pub mod cache;
 pub use cache::{find_font, font_names, FontCache, Printer, EmbeddedPrinter};
 #[cfg(feature = "std")]
-pub use cache::{FragmentConfig, FragmentFlags, FragmentOutput, FragmentSet, RgbaPrinter};
+pub use cache::{composite_from, FragmentConfig, FragmentFlags, FragmentOutput, FragmentSet, RgbaPrinter};
