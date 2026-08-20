@@ -3,7 +3,7 @@ use spf::core::{Character, Font, FontTable, Layout, Pixmap, PixmapTable};
 use crate::{
     print::{GenericPrintConfig, RenderSurface, RenderableTexture},
     utilities::compact_layout,
-    Bitmap, BitmapU8, Vec, VecMap,
+    vec, Bitmap, BitmapU8, Vec, VecMap,
 };
 
 use super::{find_font, generic_update_cache, FontCache, Printer, TextureBuilder};
