@@ -1,7 +1,8 @@
-//! Tests for `RgbaPrinter::render_with_metadata`/`print_str_with_metadata`
-//! (Phase 4's fused rasterize + metadata pass). Uses synthetic in-memory
-//! `Layout`s (see `tests/placement.rs` for why `Default::default()` +
-//! field assignment is used instead of a struct literal).
+//! Tests for `RgbaPrinter::render_with_fragments`/`print_str_with_fragments`
+//! (Phase 6's fragment model, replacing Phase 4's `RasterMetadata`). Uses
+//! synthetic in-memory `Layout`s (see `tests/placement.rs` for why
+//! `Default::default()` + field assignment is used instead of a struct
+//! literal).
 #![cfg(feature = "std")] // RgbaPrinter/ril are std-only
 
 use render_spf::*;
@@ -38,10 +39,9 @@ fn pack_bits(values: &[u8], bits_per_pixel: usize) -> Vec<u8> {
 ///
 /// Printing "AB" with letter_spacing 0 places A at x=[0,2) and B at
 /// x=[1,3), so column x=1 is A's *second* (red, opaque) pixel underneath
-/// B's *first* (transparent) pixel -- the exact overlap case
-/// `RasterMetadata`'s docs describe: the display buffer keeps A's visible
-/// red ink (B's write there is alpha=0, skipped), but metadata names B as
-/// the owner (unconditional overwrite, last-glyph-wins for metadata).
+/// B's *first* (transparent) pixel -- the overlap case the fragment model
+/// exists for: both sources survive as separate fragments instead of one
+/// silently overwriting the other.
 fn build_overlap_layout() -> Layout {
     let mut white = Color::default();
     white.red = 255;
@@ -111,39 +111,82 @@ fn config(letter_spacing: u8) -> GenericPrintConfig {
 }
 
 #[test]
-fn overlap_display_and_metadata_can_disagree_on_ownership() {
+fn overlap_column_carries_both_glyphs_as_separate_fragments() {
     let layout = build_overlap_layout();
     let mut printer = RgbaPrinter::from_font_named("Test", &layout, config(0)).unwrap();
-    let output = printer.print_str_with_metadata("AB");
+    let output = printer.print_str_with_fragments("AB", &FragmentConfig::default());
 
     assert_eq!(output.surface.width(), 3);
     assert_eq!(output.surface.height(), 1);
+    let f = &output.fragments;
 
-    // x=0: A only (red, opaque).
-    let p0 = output.surface.pixels().next().unwrap().first().unwrap();
-    assert_eq!((p0.r, p0.g, p0.b, p0.a), (255, 0, 0, 255));
-    assert_eq!(output.metadata.char_index[0], 0);
-    assert_eq!(output.metadata.char_x[0], 0);
-    assert_eq!(output.metadata.char_y[0], 0);
-    assert_eq!(output.metadata.base_rgba[0], [255, 0, 0, 255]);
+    // x=0: A only (red, opaque). One fragment.
+    assert!(!f.is_multichar(0));
+    let start = f.frag_offsets[0] as usize;
+    assert_eq!(f.frag_offsets[1] - f.frag_offsets[0], 1);
+    assert_eq!(f.frag_rgba[start], [255, 0, 0, 255]);
+    assert_eq!(f.frag_char_index[start], 0);
+    assert_eq!(f.frag_char_x[start], 0);
+    assert_eq!(f.frag_char_y[start], 0);
+    assert_eq!(f.frag_flags[start] & FragmentFlags::INKED, FragmentFlags::INKED);
+    assert_eq!(f.composite(0), [255, 0, 0, 255]);
 
-    // x=1: overlap column. Display still shows A's red ink (B's write
-    // here is alpha=0, skipped) -- but metadata names B as the owner,
-    // since metadata writes are unconditional and B is drawn after A.
+    // x=1: overlap column. Both A's opaque red and B's transparent-white
+    // survive as fragments, bottom-most (paint order) first.
+    assert!(f.is_multichar(1));
+    let start = f.frag_offsets[1] as usize;
+    let end = f.frag_offsets[2] as usize;
+    assert_eq!(end - start, 2);
+
+    // Fragment 0: A's second pixel, red, opaque, inked.
+    assert_eq!(f.frag_char_index[start], 0);
+    assert_eq!(f.frag_char_x[start], 1);
+    assert_eq!(f.frag_char_y[start], 0);
+    assert_eq!(f.frag_rgba[start], [255, 0, 0, 255]);
+    assert_eq!(f.frag_flags[start] & FragmentFlags::INKED, FragmentFlags::INKED);
+
+    // Fragment 1: B's first pixel, transparent white, rect-only.
+    assert_eq!(f.frag_char_index[start + 1], 1);
+    assert_eq!(f.frag_char_x[start + 1], 0);
+    assert_eq!(f.frag_char_y[start + 1], 0);
+    assert_eq!(f.frag_rgba[start + 1], [255, 255, 255, 0]);
+    assert_eq!(f.frag_flags[start + 1] & FragmentFlags::INKED, 0);
+
+    // Composited (source-over, back-to-front): B's transparent hole leaves
+    // A's red visible underneath -- matches the plain display surface.
+    assert_eq!(f.composite(1), [255, 0, 0, 255]);
     let p1 = output.surface.pixels().next().unwrap().get(1).unwrap();
     assert_eq!((p1.r, p1.g, p1.b, p1.a), (255, 0, 0, 255));
-    assert_eq!(output.metadata.char_index[1], 1);
-    assert_eq!(output.metadata.char_x[1], 0);
-    assert_eq!(output.metadata.char_y[1], 0);
-    assert_eq!(output.metadata.base_rgba[1], [255, 255, 255, 0]);
 
-    // x=2: B only (green, opaque).
-    let p2 = output.surface.pixels().next().unwrap().get(2).unwrap();
-    assert_eq!((p2.r, p2.g, p2.b, p2.a), (0, 255, 0, 255));
-    assert_eq!(output.metadata.char_index[2], 1);
-    assert_eq!(output.metadata.char_x[2], 1);
-    assert_eq!(output.metadata.char_y[2], 0);
-    assert_eq!(output.metadata.base_rgba[2], [0, 255, 0, 255]);
+    // x=2: B only (green, opaque). One fragment.
+    assert!(!f.is_multichar(2));
+    let start = f.frag_offsets[2] as usize;
+    assert_eq!(f.frag_char_index[start], 1);
+    assert_eq!(f.frag_char_x[start], 1);
+    assert_eq!(f.frag_char_y[start], 0);
+    assert_eq!(f.frag_rgba[start], [0, 255, 0, 255]);
+    assert_eq!(f.composite(2), [0, 255, 0, 255]);
+}
+
+#[test]
+fn rect_only_suppression_drops_the_transparent_fragment_but_keeps_composite() {
+    let layout = build_overlap_layout();
+    let mut printer = RgbaPrinter::from_font_named("Test", &layout, config(0)).unwrap();
+    let output = printer.print_str_with_fragments(
+        "AB",
+        &FragmentConfig {
+            include_rect_only: false,
+        },
+    );
+    let f = &output.fragments;
+
+    // The overlap column now carries only A's inked fragment -- B's
+    // transparent rect-only pixel was suppressed.
+    assert!(!f.is_multichar(1));
+    let start = f.frag_offsets[1] as usize;
+    assert_eq!(f.frag_offsets[2] - f.frag_offsets[1], 1);
+    assert_eq!(f.frag_char_index[start], 0);
+    assert_eq!(f.composite(1), [255, 0, 0, 255]);
 }
 
 /// A single 1x1 glyph "A", opaque red, advance_x 1. Printing "AA" with
@@ -191,34 +234,38 @@ fn build_background_layout() -> Layout {
 }
 
 #[test]
-fn letter_spacing_gap_is_background_not_owned_by_either_neighbor() {
+fn letter_spacing_gap_has_no_fragments_and_composites_transparent() {
     let layout = build_background_layout();
     let mut printer = RgbaPrinter::from_font_named("Test", &layout, config(1)).unwrap();
-    let output = printer.print_str_with_metadata("AA");
+    let output = printer.print_str_with_fragments("AA", &FragmentConfig::default());
+    let f = &output.fragments;
 
     assert_eq!(output.surface.width(), 3); // A(1) + gap(1) + A(1)
 
-    assert_eq!(output.metadata.char_index[0], 0);
-    assert_eq!(output.metadata.base_rgba[0], [255, 0, 0, 255]);
+    assert_eq!(f.frag_offsets[1] - f.frag_offsets[0], 1);
+    let start = f.frag_offsets[0] as usize;
+    assert_eq!(f.frag_char_index[start], 0);
+    assert_eq!(f.frag_rgba[start], [255, 0, 0, 255]);
 
-    // The letter_spacing column: no glyph's pixmap rect covers it.
-    assert_eq!(output.metadata.char_index[1], -1);
-    assert_eq!(output.metadata.char_x[1], 0);
-    assert_eq!(output.metadata.char_y[1], 0);
-    assert_eq!(output.metadata.base_rgba[1], [0, 0, 0, 0]);
+    // The letter_spacing column: no glyph's pixmap rect covers it, so it
+    // has an empty fragment range and composites to fully transparent.
+    assert_eq!(f.frag_offsets[1], f.frag_offsets[2]);
+    assert_eq!(f.composite(1), [0, 0, 0, 0]);
 
-    assert_eq!(output.metadata.char_index[2], 1);
-    assert_eq!(output.metadata.base_rgba[2], [255, 0, 0, 255]);
+    assert_eq!(f.frag_offsets[3] - f.frag_offsets[2], 1);
+    let start = f.frag_offsets[2] as usize;
+    assert_eq!(f.frag_char_index[start], 1);
+    assert_eq!(f.frag_rgba[start], [255, 0, 0, 255]);
 }
 
 #[test]
-fn render_with_metadata_agrees_with_render_on_the_display_buffer() {
+fn render_with_fragments_composited_surface_agrees_with_render() {
     let layout = build_overlap_layout();
     let mut printer = RgbaPrinter::from_font_named("Test", &layout, config(0)).unwrap();
 
     let keys = printer.shape_str("AB").glyphs;
     let plain = printer.render(&keys);
-    let fused = printer.render_with_metadata(&keys);
+    let fused = printer.render_with_fragments(&keys, &FragmentConfig::default());
 
     assert_eq!(plain.width(), fused.surface.width());
     assert_eq!(plain.height(), fused.surface.height());

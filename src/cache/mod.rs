@@ -16,6 +16,11 @@ mod full;
 #[cfg(feature = "std")]
 pub use full::*;
 
+#[cfg(feature = "std")]
+mod fragment;
+#[cfg(feature = "std")]
+pub use fragment::*;
+
 pub trait FontCache {
     /// Cloned into each [`PlacedGlyph`](crate::print::PlacedGlyph) so a
     /// [`Placement`](crate::print::Placement) can be looked back up against
