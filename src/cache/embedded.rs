@@ -2,8 +2,9 @@ use spf::core::{Character, Font, FontTable, Layout, Pixmap, PixmapTable};
 
 use crate::{
     print::{GenericPrintConfig, RenderSurface, RenderableTexture},
+    shape::is_multi_cluster,
     utilities::compact_layout,
-    vec, Bitmap, BitmapU8, Vec, VecMap,
+    Bitmap, BitmapU8, GlyphId, Trie, Vec,
 };
 
 use super::{find_font, generic_update_cache, FontCache, Printer, TextureBuilder};
@@ -104,21 +105,21 @@ impl TextureBuilder<AbstractCharacterU8> for EmbeddedTextureBuilder {
 
 /// Character cache for embedded / `no_std` targets.
 ///
-/// Keyed by the first byte of each grapheme cluster (`u8`), backed by a
-/// [`VecMap`] for allocation-minimal O(n) lookups. `max_height` is computed
-/// once during loading so [`FontCache::max_height`] is O(1).
+/// Glyphs are stored flat, indexed directly by [`GlyphId`]; [`Trie`] maps
+/// codepoint sequences to that index — the same lookup mechanism as the
+/// std backend. Index 0 is always a reserved blank glyph, [`shape`](crate::shape)'s
+/// `notdef` fallback. `max_height` is computed once during loading so
+/// [`FontCache::max_height`] is O(1).
 #[derive(Clone, Default)]
 pub struct CharacterCacheU8 {
-    pub(crate) mappings: VecMap<u8, AbstractCharacterU8>,
+    pub(crate) glyphs: Vec<AbstractCharacterU8>,
+    pub(crate) trie: Trie,
     pub(crate) max_height: u32,
 }
 
 impl CharacterCacheU8 {
-    pub const fn new() -> Self {
-        Self {
-            mappings: VecMap::new(),
-            max_height: 0,
-        }
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn track_height(&mut self, glyph: &AbstractCharacterU8) {
@@ -133,18 +134,34 @@ impl CharacterCacheU8 {
         // The embedded backend is monochrome — ColorControl is constructed
         // to satisfy generic_update_cache's signature but immediately dropped.
         let mut color_control = ColorControl::with_capacity(layout.color_tables.len());
+
+        // Reserve index 0 as the notdef fallback before any real glyph.
+        self.glyphs.push(AbstractCharacterU8::default());
+
+        let mut trie_entries: Vec<(crate::String, GlyphId, bool)> = Vec::new();
+
         generic_update_cache(
             font_table,
             font,
             layout,
             &EmbeddedTextureBuilder,
             &mut color_control,
-            |grapheme| *grapheme.as_bytes().first().unwrap_or(&0),
-            |key, glyph: AbstractCharacterU8| {
+            |code_points, glyph: AbstractCharacterU8| {
                 self.track_height(&glyph);
-                self.mappings.insert(key, glyph);
+                let id = GlyphId(self.glyphs.len() as u32);
+                self.glyphs.push(glyph);
+                if !code_points.is_empty() {
+                    let is_ligature = is_multi_cluster(code_points);
+                    trie_entries.push((code_points.into(), id, is_ligature));
+                }
             },
         );
+
+        let entry_refs: Vec<(&str, GlyphId, bool)> = trie_entries
+            .iter()
+            .map(|(key, id, is_ligature)| (key.as_str(), *id, *is_ligature))
+            .collect();
+        self.trie = Trie::build(&entry_refs);
     }
 
     /// Memory-optimised update path for severely constrained targets.
@@ -206,29 +223,48 @@ impl CharacterCacheU8 {
         layout.character_tables.shrink_to_fit();
         drop(layout);
 
-        let mut characters = vec![];
+        // Single-byte, ASCII-only keys — consistent with this path's
+        // existing reduced-fidelity contract (first table only, no color,
+        // no double-indirection resolution). Panics on empty code_points,
+        // same as the original implementation this replaces: key_bytes
+        // stays 1:1 aligned with abstract_characters by construction, which
+        // GlyphId(i + 1) below relies on.
+        let mut key_bytes: Vec<[u8; 1]> = Vec::with_capacity(character_table.characters.len());
         for character in character_table.characters.iter_mut() {
-            let character = core::mem::take(&mut character.code_points);
-            characters.push(character.as_bytes()[0]);
+            let code_points = core::mem::take(&mut character.code_points);
+            key_bytes.push([code_points.as_bytes()[0]]);
         }
-
-        characters.shrink_to_fit();
+        key_bytes.shrink_to_fit();
         abstract_characters.shrink_to_fit();
 
-        self.mappings = VecMap {
-            keys: characters,
-            values: abstract_characters,
-        };
+        self.glyphs = Vec::with_capacity(abstract_characters.len() + 1);
+        self.glyphs.push(AbstractCharacterU8::default());
+        self.glyphs.extend(abstract_characters);
+
+        // A multi-byte UTF-8 lead byte can't stand alone as a valid str;
+        // such characters are simply unreachable via the trie (they'd fall
+        // through to notdef when shaped) rather than widening this path's
+        // scope to full codepoint sequences.
+        let entries: Vec<(&str, GlyphId, bool)> = key_bytes
+            .iter()
+            .enumerate()
+            .filter_map(|(i, byte)| {
+                core::str::from_utf8(byte)
+                    .ok()
+                    .map(|s| (s, GlyphId((i + 1) as u32), false))
+            })
+            .collect();
+        self.trie = Trie::build(&entries);
     }
 }
 
 impl FontCache for CharacterCacheU8 {
-    type Key = u8;
+    type Key = GlyphId;
     type Glyph = AbstractCharacterU8;
     type Surface = Bitmap;
 
-    fn get(&self, key: &u8) -> Option<&AbstractCharacterU8> {
-        self.mappings.get(key)
+    fn get(&self, key: &GlyphId) -> Option<&AbstractCharacterU8> {
+        self.glyphs.get(key.0 as usize)
     }
 
     fn max_height(&self) -> u32 {
@@ -238,8 +274,8 @@ impl FontCache for CharacterCacheU8 {
 
 /// A [`Printer`] pre-configured for the embedded backend.
 ///
-/// Renders text as a monochrome [`Bitmap`], keyed by ASCII byte (`u8`).
-/// Fully `no_std` — no heap beyond the glyph data itself.
+/// Renders text as a monochrome [`Bitmap`]. Fully `no_std` — no heap
+/// beyond the glyph data itself.
 ///
 /// # Example
 /// ```ignore
@@ -295,8 +331,19 @@ impl EmbeddedPrinter {
         Self::new(cache, config)
     }
 
-    /// Convenience: render a `&str` directly without converting to `&[u8]`.
+    /// Shape `text` against this printer's font without rendering it.
+    /// Maximal munch, respecting
+    /// [`self.config.allow_ligatures`](GenericPrintConfig).
+    pub fn shape_str(&self, text: &str) -> crate::shape::Shaped {
+        crate::shape::shape(text, &self.cache.trie, GlyphId(0), self.config.allow_ligatures)
+    }
+
+    /// Convenience: shape and render `&str` directly. Shapes against the
+    /// cache's [`Trie`] first (maximal munch, respecting
+    /// [`self.config.allow_ligatures`](GenericPrintConfig)), then lays out
+    /// and renders the resulting glyphs.
     pub fn print_str(&self, text: &str) -> Bitmap {
-        self.print(text.as_bytes())
+        let shaped = self.shape_str(text);
+        self.print(&shaped.glyphs)
     }
 }

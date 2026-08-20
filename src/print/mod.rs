@@ -38,7 +38,7 @@ pub enum VerticalAlign {
 }
 
 /// Configuration for a [`Printer::print`](crate::cache::Printer::print) call.
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Debug)]
 pub struct GenericPrintConfig {
     /// Extra pixels inserted between each glyph.
     pub letter_spacing: u8,
@@ -46,6 +46,23 @@ pub struct GenericPrintConfig {
     /// height and glyphs are positioned according to `vertical_align`.
     pub vertical_expand: bool,
     pub vertical_align: VerticalAlign,
+    /// Whether `print_str`'s shaping pass may match a font's multi-cluster
+    /// ligature entries (e.g. "ffi" as one glyph). Non-ligature entries (a
+    /// single cluster spanning multiple codepoints, like a base letter plus
+    /// combining accent) are never affected by this, since only entries
+    /// whose key spans more than one grapheme cluster are ligatures.
+    pub allow_ligatures: bool,
+}
+
+impl Default for GenericPrintConfig {
+    fn default() -> Self {
+        Self {
+            letter_spacing: 0,
+            vertical_expand: false,
+            vertical_align: VerticalAlign::default(),
+            allow_ligatures: true,
+        }
+    }
 }
 
 /// A single glyph's computed position within a [`Placement`], produced by

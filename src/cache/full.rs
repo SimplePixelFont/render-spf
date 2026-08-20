@@ -1,14 +1,14 @@
 #![cfg(feature = "std")]
 
 use bitvec::{field::BitField, order::Lsb0, view::BitView};
-use hashbrown::HashMap;
 use ril::{Image, Rgba};
 use spf::core::{Character, Font, FontTable, Layout, Pixmap, PixmapTable};
 
 use crate::{
     color::{ColorControl, PixelRef},
     print::{layout, GenericPrintConfig, RenderSurface, RenderableTexture},
-    String, Vec,
+    shape::is_multi_cluster,
+    GlyphId, String, Trie, Vec,
 };
 
 use super::{find_font, generic_update_cache, FontCache, TextureBuilder};
@@ -169,11 +169,16 @@ impl TextureBuilder<AbstractCharacter> for RgbaTextureBuilder {
 
 /// Character cache for `std` targets.
 ///
-/// Keyed by the full grapheme cluster [`String`], backed by [`HashMap`] for
-/// O(1) average-case lookups. Supports multi-byte grapheme clusters.
+/// Glyphs are stored flat, indexed directly by [`GlyphId`]; [`Trie`] maps
+/// codepoint sequences (including multi-codepoint ligatures) to that index.
+/// Index 0 is always a reserved blank glyph — [`shape`](crate::shape)'s
+/// `notdef` fallback for a font with no match at all at some position, so a
+/// total lookup failure degrades to a blank box instead of panicking on
+/// [`FontCache::get`].
 #[derive(Clone, Default)]
 pub struct CharacterCacheImpl {
-    pub(crate) mappings: HashMap<String, AbstractCharacter>,
+    pub(crate) glyphs: Vec<AbstractCharacter>,
+    pub(crate) trie: Trie,
     pub(crate) max_height: u32,
 }
 
@@ -198,30 +203,48 @@ impl CharacterCacheImpl {
         // referenced by this font remain empty.
         let mut color_control = ColorControl::with_capacity(layout.color_tables.len());
 
+        // Reserve index 0 as the notdef fallback before any real glyph.
+        self.glyphs.push(AbstractCharacter::default());
+
+        let mut trie_entries: Vec<(String, GlyphId, bool)> = Vec::new();
+
         generic_update_cache(
             font_table,
             font,
             layout,
             &RgbaTextureBuilder,
             &mut color_control,
-            |grapheme| grapheme.to_owned(),
-            |key, glyph: AbstractCharacter| {
+            |code_points, glyph: AbstractCharacter| {
                 self.track_height(&glyph);
-                self.mappings.insert(key, glyph);
+                let id = GlyphId(self.glyphs.len() as u32);
+                self.glyphs.push(glyph);
+                // An empty code_points would insert a zero-length trie key,
+                // which shape()'s descent can never actually reach past the
+                // root -- skip it rather than build an unreachable entry.
+                if !code_points.is_empty() {
+                    let is_ligature = is_multi_cluster(code_points);
+                    trie_entries.push((code_points.to_owned(), id, is_ligature));
+                }
             },
         );
+
+        let entry_refs: Vec<(&str, GlyphId, bool)> = trie_entries
+            .iter()
+            .map(|(key, id, is_ligature)| (key.as_str(), *id, *is_ligature))
+            .collect();
+        self.trie = Trie::build(&entry_refs);
 
         color_control
     }
 }
 
 impl FontCache for CharacterCacheImpl {
-    type Key = String;
+    type Key = GlyphId;
     type Glyph = AbstractCharacter;
     type Surface = Image<Rgba>;
 
-    fn get(&self, key: &String) -> Option<&AbstractCharacter> {
-        self.mappings.get(key)
+    fn get(&self, key: &GlyphId) -> Option<&AbstractCharacter> {
+        self.glyphs.get(key.0 as usize)
     }
 
     fn max_height(&self) -> u32 {
@@ -299,18 +322,30 @@ impl RgbaPrinter {
         Some(Self::from_font(font_table, font, layout, config))
     }
 
+    /// Shape `text` against this printer's font without rendering it.
+    /// Maximal munch, respecting
+    /// [`self.config.allow_ligatures`](GenericPrintConfig). Useful for
+    /// caching a [`Shaped`](crate::shape::Shaped) across repeated renders
+    /// (invalidated on text/config change only, not per frame) or
+    /// inspecting glyph placement without a full render.
+    pub fn shape_str(&self, text: &str) -> crate::shape::Shaped {
+        crate::shape::shape(text, &self.cache.trie, GlyphId(0), self.config.allow_ligatures)
+    }
+
     /// Rasterise `text` onto a new [`Image<Rgba>`], resolving pixel colors
     /// through the current state of [`self.colors`](Self::colors).
     ///
     /// Takes `&mut self`: [`ColorControl::resolve`] rebuilds its render-time
     /// cache in place when the palette has changed since the last call.
     pub fn print_str(&mut self, text: &str) -> Image<Rgba> {
-        let keys: Vec<String> = text.chars().map(|c| c.to_string()).collect();
-        self.render(&keys)
+        let shaped = self.shape_str(text);
+        self.render(&shaped.glyphs)
     }
 
-    /// Rasterise a pre-built key slice onto a new [`Image<Rgba>`].
-    pub fn render(&mut self, keys: &[String]) -> Image<Rgba> {
+    /// Rasterise a pre-shaped glyph slice onto a new [`Image<Rgba>`]. Prefer
+    /// [`print_str`](Self::print_str) unless you already have `Shaped`
+    /// glyphs from elsewhere (e.g. a cached shape from a previous call).
+    pub fn render(&mut self, keys: &[GlyphId]) -> Image<Rgba> {
         let placement = layout(keys, &self.config, &self.cache);
         let mut surface = Image::new(placement.width, placement.height, Rgba::transparent());
 

@@ -99,9 +99,6 @@ fn is_hangul_jamo(c: char) -> bool {
 /// between a font's presentational ligature (multiple clusters, one glyph,
 /// e.g. "ffi") and a single cluster made of multiple codepoints (e.g. "e"
 /// + combining accent, which is not a ligature).
-// TEMPORARY: unused until the next commit wires trie-entry classification
-// (is this key a ligature?) into cache construction.
-#[allow(dead_code)]
 pub(crate) fn is_multi_cluster(text: &str) -> bool {
     let chars: Vec<(usize, char)> = text.char_indices().collect();
     if chars.is_empty() {

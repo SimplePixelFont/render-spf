@@ -87,6 +87,7 @@ fn config(vertical_expand: bool, vertical_align: VerticalAlign) -> GenericPrintC
         letter_spacing: 1,
         vertical_expand,
         vertical_align,
+        allow_ligatures: true,
     }
 }
 
@@ -110,7 +111,7 @@ fn width_and_advance_math() {
     let layout = build_test_layout();
     let printer = RgbaPrinter::from_font_named("Test", &layout, config(false, VerticalAlign::Top))
         .unwrap();
-    let keys = vec!["A".to_string(), "B".to_string()];
+    let keys = printer.shape_str("AB").glyphs;
     let placement = render_spf::layout(&keys, &printer.config, &printer.cache);
 
     // last glyph contributes its own width, not advance_x: 6 (A's advance)
@@ -130,7 +131,7 @@ fn vertical_expand_false_uses_natural_height_and_zero_offset() {
     for align in [VerticalAlign::Top, VerticalAlign::Middle, VerticalAlign::Bottom] {
         let printer =
             RgbaPrinter::from_font_named("Test", &layout, config(false, align)).unwrap();
-        let keys = vec!["A".to_string(), "B".to_string()];
+        let keys = printer.shape_str("AB").glyphs;
         let placement = render_spf::layout(&keys, &printer.config, &printer.cache);
         assert_eq!(placement.height, 8);
         for glyph in &placement.glyphs {
@@ -144,7 +145,7 @@ fn vertical_expand_true_top_align_is_always_zero_offset() {
     let layout = build_test_layout();
     let printer =
         RgbaPrinter::from_font_named("Test", &layout, config(true, VerticalAlign::Top)).unwrap();
-    let keys = vec!["A".to_string(), "B".to_string()];
+    let keys = printer.shape_str("AB").glyphs;
     let placement = render_spf::layout(&keys, &printer.config, &printer.cache);
     assert_eq!(placement.height, 10); // cache.max_height(), from "C"
     for glyph in &placement.glyphs {
@@ -165,7 +166,7 @@ fn vertical_align_middle_offsets_by_half_the_height_difference() {
     let printer =
         RgbaPrinter::from_font_named("Test", &layout, config(true, VerticalAlign::Middle))
             .unwrap();
-    let keys = vec!["A".to_string(), "B".to_string()];
+    let keys = printer.shape_str("AB").glyphs;
     let placement = render_spf::layout(&keys, &printer.config, &printer.cache);
     assert_eq!(placement.height, 10);
     for glyph in &placement.glyphs {
@@ -180,7 +181,7 @@ fn vertical_align_bottom_offsets_by_the_full_height_difference() {
     let printer =
         RgbaPrinter::from_font_named("Test", &layout, config(true, VerticalAlign::Bottom))
             .unwrap();
-    let keys = vec!["A".to_string(), "B".to_string()];
+    let keys = printer.shape_str("AB").glyphs;
     let placement = render_spf::layout(&keys, &printer.config, &printer.cache);
     assert_eq!(placement.height, 10);
     for glyph in &placement.glyphs {
@@ -196,7 +197,7 @@ fn vertical_align_middle_bottom_agree_with_top_when_run_reaches_max_height() {
     for align in [VerticalAlign::Top, VerticalAlign::Middle, VerticalAlign::Bottom] {
         let printer =
             RgbaPrinter::from_font_named("Test", &layout, config(true, align)).unwrap();
-        let keys = vec!["A".to_string(), "C".to_string()];
+        let keys = printer.shape_str("AC").glyphs;
         let placement = render_spf::layout(&keys, &printer.config, &printer.cache);
         assert_eq!(placement.height, 10);
         for glyph in &placement.glyphs {
@@ -219,8 +220,8 @@ fn std_and_embedded_backends_agree_on_placement() {
         EmbeddedPrinter::from_font_named("Test", &layout_data, config(true, VerticalAlign::Top))
             .unwrap();
 
-    let rgba_keys = vec!["A".to_string(), "B".to_string(), "C".to_string()];
-    let embedded_keys: Vec<u8> = vec![b'A', b'B', b'C'];
+    let rgba_keys = rgba.shape_str("ABC").glyphs;
+    let embedded_keys = embedded.shape_str("ABC").glyphs;
 
     let rgba_placement = render_spf::layout(&rgba_keys, &rgba.config, &rgba.cache);
     let embedded_placement = render_spf::layout(&embedded_keys, &embedded.config, &embedded.cache);
@@ -251,7 +252,7 @@ fn render_surface_matches_placement_dimensions() {
     let mut printer =
         RgbaPrinter::from_font_named("Test", &layout_data, config(true, VerticalAlign::Top))
             .unwrap();
-    let keys = vec!["A".to_string(), "B".to_string()];
+    let keys = printer.shape_str("AB").glyphs;
     let placement = render_spf::layout(&keys, &printer.config, &printer.cache);
     let image = printer.render(&keys);
 

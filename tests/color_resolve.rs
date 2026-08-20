@@ -63,9 +63,10 @@ fn live_color_edits_are_reflected_across_repeated_renders() {
         letter_spacing: 1,
         vertical_expand: false,
         vertical_align: VerticalAlign::Top,
+        allow_ligatures: true,
     };
     let mut printer = RgbaPrinter::from_font_named("Test", &layout, config).unwrap();
-    let keys = vec!["A".to_string()];
+    let keys = printer.shape_str("A").glyphs;
 
     // Original: palette index 1 is green.
     let image = printer.render(&keys);
