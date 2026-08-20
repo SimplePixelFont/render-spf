@@ -64,6 +64,10 @@ fn live_color_edits_are_reflected_across_repeated_renders() {
         vertical_expand: false,
         vertical_align: VerticalAlign::Top,
         allow_ligatures: true,
+        padding_left: 0,
+        padding_top: 0,
+        padding_right: 0,
+        padding_bottom: 0,
     };
     let mut printer = RgbaPrinter::from_font_named("Test", &layout, config).unwrap();
     let keys = printer.shape_str("A").glyphs;

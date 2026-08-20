@@ -88,6 +88,10 @@ fn config(vertical_expand: bool, vertical_align: VerticalAlign) -> GenericPrintC
         vertical_expand,
         vertical_align,
         allow_ligatures: true,
+        padding_left: 0,
+        padding_top: 0,
+        padding_right: 0,
+        padding_bottom: 0,
     }
 }
 
@@ -204,6 +208,67 @@ fn vertical_align_middle_bottom_agree_with_top_when_run_reaches_max_height() {
             assert_eq!(glyph.dst_y, 0);
         }
     }
+}
+
+// ---------------------------------------------------------------------
+// Padding: blank margin around the whole run, outside the text's own
+// bounding box -- distinct from letter_spacing (between glyphs).
+// ---------------------------------------------------------------------
+
+#[test]
+fn padding_grows_the_surface_and_shifts_every_glyph() {
+    let layout = build_test_layout();
+    let mut cfg = config(false, VerticalAlign::Top);
+    cfg.padding_left = 3;
+    cfg.padding_top = 2;
+    cfg.padding_right = 5;
+    cfg.padding_bottom = 4;
+    let printer = RgbaPrinter::from_font_named("Test", &layout, cfg).unwrap();
+    let keys = printer.shape_str("AB").glyphs;
+    let placement = render_spf::layout(&keys, &printer.config, &printer.cache);
+
+    // Unpadded: width 11 (6 + 1 + 4), height 8 (natural, vertical_expand off).
+    assert_eq!(placement.width, 11 + 3 + 5);
+    assert_eq!(placement.height, 8 + 2 + 4);
+
+    // Every glyph shifts by (padding_left, padding_top) -- letter_spacing
+    // math between glyphs is untouched.
+    assert_eq!(placement.glyphs[0].dst_x, 3);
+    assert_eq!(placement.glyphs[0].dst_y, 2);
+    assert_eq!(placement.glyphs[1].dst_x, 3 + 6 + 1);
+    assert_eq!(placement.glyphs[1].dst_y, 2);
+}
+
+#[test]
+fn padding_top_stacks_on_top_of_vertical_align_offset() {
+    let layout = build_test_layout();
+    // "A","B" only: natural height 8, surface height (max_height) 10 --
+    // same fixture as vertical_align_middle_offsets_by_half_the_height_difference.
+    let mut cfg = config(true, VerticalAlign::Middle);
+    cfg.padding_top = 5;
+    cfg.padding_bottom = 1;
+    let printer = RgbaPrinter::from_font_named("Test", &layout, cfg).unwrap();
+    let keys = printer.shape_str("AB").glyphs;
+    let placement = render_spf::layout(&keys, &printer.config, &printer.cache);
+
+    assert_eq!(placement.height, 10 + 5 + 1);
+    for glyph in &placement.glyphs {
+        // (10 - 8) / 2 == 1 alignment offset, plus padding_top.
+        assert_eq!(glyph.dst_y, 1 + 5);
+    }
+}
+
+#[test]
+fn zero_padding_is_unobservable() {
+    let layout = build_test_layout();
+    let printer =
+        RgbaPrinter::from_font_named("Test", &layout, config(true, VerticalAlign::Middle))
+            .unwrap();
+    let keys = printer.shape_str("AB").glyphs;
+    let placement = render_spf::layout(&keys, &printer.config, &printer.cache);
+    assert_eq!(placement.height, 10);
+    assert_eq!(placement.glyphs[0].dst_x, 0);
+    assert_eq!(placement.glyphs[0].dst_y, 1);
 }
 
 // ---------------------------------------------------------------------

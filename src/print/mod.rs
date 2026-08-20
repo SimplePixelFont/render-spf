@@ -52,6 +52,17 @@ pub struct GenericPrintConfig {
     /// combining accent) are never affected by this, since only entries
     /// whose key spans more than one grapheme cluster are ligatures.
     pub allow_ligatures: bool,
+    /// Blank pixels added around the whole run, outside the text's own
+    /// bounding box — not between glyphs (that's `letter_spacing`). Zero by
+    /// default: existing callers see no size change. A processor effect
+    /// that reaches beyond a glyph's own pixmap rect (an outline or glow a
+    /// few pixels wide) has nowhere to draw without this — the surface is
+    /// otherwise cropped exactly to the text, so ink at the outermost edge
+    /// has no margin to spread into.
+    pub padding_left: u16,
+    pub padding_top: u16,
+    pub padding_right: u16,
+    pub padding_bottom: u16,
 }
 
 impl Default for GenericPrintConfig {
@@ -61,6 +72,10 @@ impl Default for GenericPrintConfig {
             vertical_expand: false,
             vertical_align: VerticalAlign::default(),
             allow_ligatures: true,
+            padding_left: 0,
+            padding_top: 0,
+            padding_right: 0,
+            padding_bottom: 0,
         }
     }
 }
@@ -116,6 +131,15 @@ pub struct Placement<K> {
 /// differing heights within the run share a top offset (block alignment)
 /// rather than being individually centred. SPF has no baseline concept,
 /// so this is the deliberate choice, not an oversight.
+///
+/// `config`'s `padding_*` fields add blank margin around the run: `width`/
+/// `height` grow by `padding_left + padding_right`/`padding_top +
+/// padding_bottom`, and every glyph is shifted by `(padding_left,
+/// padding_top)`. `vertical_align`'s block-alignment math is computed
+/// first, against the unpadded height, exactly as without padding —
+/// padding is applied on top as a uniform shift, not folded into the
+/// alignment decision itself. An empty `keys` still lays out to `0x0`
+/// with no padding — nothing to pad around.
 pub fn layout<C>(keys: &[C::Key], config: &GenericPrintConfig, cache: &C) -> Placement<C::Key>
 where
     C: FontCache,
@@ -138,24 +162,27 @@ where
         natural_height = natural_height.max(glyph.height());
     }
 
-    let height = if config.vertical_expand {
+    let unpadded_height = if config.vertical_expand {
         cache.max_height()
     } else {
         natural_height
     };
 
-    let offset_y: u32 = if config.vertical_expand {
+    let offset_y: u32 = (if config.vertical_expand {
         match config.vertical_align {
             VerticalAlign::Top => 0,
-            VerticalAlign::Middle => height.saturating_sub(natural_height) / 2,
-            VerticalAlign::Bottom => height.saturating_sub(natural_height),
+            VerticalAlign::Middle => unpadded_height.saturating_sub(natural_height) / 2,
+            VerticalAlign::Bottom => unpadded_height.saturating_sub(natural_height),
         }
     } else {
         0
-    };
+    }) + config.padding_top as u32;
+
+    let width = width + config.padding_left as u32 + config.padding_right as u32;
+    let height = unpadded_height + config.padding_top as u32 + config.padding_bottom as u32;
 
     let mut glyphs = Vec::with_capacity(keys.len());
-    let mut current_x: u32 = 0;
+    let mut current_x: u32 = config.padding_left as u32;
     for key in keys {
         let glyph = cache.get(key).expect("character key not found in cache");
         glyphs.push(PlacedGlyph {

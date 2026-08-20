@@ -107,6 +107,10 @@ fn config(letter_spacing: u8) -> GenericPrintConfig {
         vertical_expand: false,
         vertical_align: VerticalAlign::Top,
         allow_ligatures: true,
+        padding_left: 0,
+        padding_top: 0,
+        padding_right: 0,
+        padding_bottom: 0,
     }
 }
 
