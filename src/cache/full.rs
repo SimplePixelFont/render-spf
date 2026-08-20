@@ -364,6 +364,113 @@ impl RgbaPrinter {
 
         surface
     }
+
+    /// Shape and rasterise `text`, producing per-pixel [`RasterMetadata`]
+    /// in the same pass. Prefer [`print_str`](Self::print_str) unless a
+    /// consumer (e.g. a processor pipeline) needs `char_index`/position/base
+    /// color per pixel.
+    pub fn print_str_with_metadata(&mut self, text: &str) -> RasterOutput {
+        let shaped = self.shape_str(text);
+        self.render_with_metadata(&shaped.glyphs)
+    }
+
+    /// Rasterise a pre-shaped glyph slice, producing per-pixel
+    /// [`RasterMetadata`] in the same pass `paste_glyph` already walks —
+    /// see Phase 4 of `spf-engine-plan.md`. Prefer
+    /// [`render`](Self::render) when metadata isn't needed; the metadata
+    /// buffers cost one `i32`/two `u16`/four `u8` per surface pixel that
+    /// `render` doesn't pay for.
+    pub fn render_with_metadata(&mut self, keys: &[GlyphId]) -> RasterOutput {
+        let placement = layout(keys, &self.config, &self.cache);
+        let mut surface = Image::new(placement.width, placement.height, Rgba::transparent());
+        let mut metadata = RasterMetadata::new(placement.width, placement.height);
+
+        for (char_index, placed) in placement.glyphs.iter().enumerate() {
+            let glyph = self
+                .cache
+                .get(&placed.key)
+                .expect("character key not found in cache");
+            paste_glyph_with_metadata(
+                &mut self.colors,
+                &mut surface,
+                &mut metadata,
+                glyph,
+                placed.dst_x,
+                placed.dst_y,
+                char_index as i32,
+            );
+        }
+
+        RasterOutput { surface, metadata }
+    }
+}
+
+/// Per-pixel metadata produced alongside a render by
+/// [`RgbaPrinter::render_with_metadata`], fused into the same pass that
+/// paints the color buffer instead of being reconstructed by walking the
+/// finished surface afterward.
+///
+/// Flat/SoA layout — parallel arrays, one entry per pixel in row-major
+/// order — matching the typed-array wasm ABI Phase 5 exposes these as, so
+/// no reshaping is needed at that boundary.
+///
+/// # Overlap and single ownership
+///
+/// Where glyphs overlap (`advance_x < width`), each buffer here uses plain
+/// last-glyph-drawn-wins overwrite, the same iteration order as
+/// [`paste_glyph`]'s color writes — deliberately not "ink wins, else the
+/// later glyph": arbitrating which glyph legitimately owns a contested
+/// pixel is explicitly out of scope for this phase (see
+/// `spf-engine-plan.md`'s out-of-scope list) and is what the fragment
+/// model in Phase 6 solves properly by not discarding either source. One
+/// consequence: a pixel can display one glyph's ink (the color buffer
+/// keeps earlier opaque writes since it skips transparent overwrites) while
+/// `char_index` names a *different*, later-drawn glyph that happened to
+/// claim that pixel with a transparent hole. This is a known limitation of
+/// the pre-fragment single-owner model, not a bug.
+#[derive(Clone, Debug)]
+pub struct RasterMetadata {
+    /// Index into the placement's glyph run of the character owning this
+    /// pixel (same indexing as [`Shaped`](crate::shape::Shaped)'s
+    /// `cp_offsets`), or `-1` for background — the bearing gap between
+    /// `width` and `advance_x`, `letter_spacing` columns, and
+    /// `vertical_expand` padding rows. This is the *pixmap rect*, not the
+    /// advance box: see `spf-engine-plan.md` 4.2.
+    pub char_index: Vec<i32>,
+    /// Column within the owning glyph's pixmap rect. `0` for background.
+    pub char_x: Vec<u16>,
+    /// Row within the owning glyph's pixmap rect. `0` for background.
+    pub char_y: Vec<u16>,
+    /// Resolved color for the full pixmap rect of the owning glyph,
+    /// regardless of alpha. Unlike the display surface (which skips
+    /// transparent writes to preserve overlap — see [`paste_glyph`]),
+    /// holes here carry whatever [`ColorControl::resolve`] returns for
+    /// that pixel, which by SPF convention is `(255, 255, 255, 0)` for a
+    /// font's transparent entry — never left as unwritten black. `(0, 0,
+    /// 0, 0)` for background.
+    pub base_rgba: Vec<[u8; 4]>,
+}
+
+impl RasterMetadata {
+    fn new(width: u32, height: u32) -> Self {
+        let n = (width as usize) * (height as usize);
+        Self {
+            char_index: vec![-1; n],
+            char_x: vec![0; n],
+            char_y: vec![0; n],
+            base_rgba: vec![[0, 0, 0, 0]; n],
+        }
+    }
+}
+
+/// The output of [`RgbaPrinter::render_with_metadata`]: the display
+/// surface plus per-pixel [`RasterMetadata`] produced in the same pass.
+///
+/// Not `Debug` — [`Image<Rgba>`] itself isn't.
+#[derive(Clone)]
+pub struct RasterOutput {
+    pub surface: Image<Rgba>,
+    pub metadata: RasterMetadata,
 }
 
 /// Composite a single glyph onto `surface` at (x, y), resolving each
@@ -381,6 +488,53 @@ fn paste_glyph(colors: &mut ColorControl, surface: &mut Image<Rgba>, glyph: &Abs
                 }
                 let (dst_x, dst_y) = (x + px, y + py);
                 if dst_x < surface.width() && dst_y < surface.height() {
+                    surface.set_pixel(dst_x, dst_y, Rgba { r, g, b, a });
+                }
+            }
+        }
+    }
+}
+
+/// Composite a single glyph onto `surface` at (x, y) exactly like
+/// [`paste_glyph`], additionally recording [`RasterMetadata`] for the
+/// glyph's full pixmap rect. `char_index` is this glyph's position in the
+/// [`Placement`](crate::print::Placement) — see [`RasterMetadata::char_index`].
+///
+/// Kept as a separate function rather than folding metadata writes into
+/// [`paste_glyph`] so `render` (the common case) doesn't pay for metadata
+/// bookkeeping it never reads.
+#[allow(clippy::too_many_arguments)]
+fn paste_glyph_with_metadata(
+    colors: &mut ColorControl,
+    surface: &mut Image<Rgba>,
+    metadata: &mut RasterMetadata,
+    glyph: &AbstractCharacter,
+    x: u32,
+    y: u32,
+    char_index: i32,
+) {
+    let (surf_width, surf_height) = (surface.width(), surface.height());
+    for py in 0..glyph.height {
+        for px in 0..glyph.width {
+            let pixel_idx = (py * glyph.width + px) as usize;
+            if let Some(&pixel_ref) = glyph.pixels.get(pixel_idx) {
+                let (r, g, b, a) = colors.resolve(pixel_ref);
+                let (dst_x, dst_y) = (x + px, y + py);
+                if dst_x >= surf_width || dst_y >= surf_height {
+                    continue;
+                }
+
+                // Metadata + base color: full pixmap rect, unconditional —
+                // see RasterMetadata's overlap docs for why this ignores
+                // alpha where paste_glyph's color write doesn't.
+                let meta_idx = (dst_y as usize) * (surf_width as usize) + (dst_x as usize);
+                metadata.char_index[meta_idx] = char_index;
+                metadata.char_x[meta_idx] = px as u16;
+                metadata.char_y[meta_idx] = py as u16;
+                metadata.base_rgba[meta_idx] = [r, g, b, a];
+
+                // Display buffer: skip transparent writes, preserves overlap.
+                if a != 0 {
                     surface.set_pixel(dst_x, dst_y, Rgba { r, g, b, a });
                 }
             }
