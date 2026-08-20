@@ -1,6 +1,7 @@
 //! End-to-end check that live `ColorControl` edits (Phase 2.3's FlatPalette
 //! cache) actually show up in `RgbaPrinter::render()` output across
 //! repeated calls on the same printer -- not just on the first render.
+#![cfg(feature = "std")] // RgbaPrinter/ril are std-only
 
 use render_spf::*;
 use spf::core::*;

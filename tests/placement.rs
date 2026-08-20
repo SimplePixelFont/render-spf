@@ -4,6 +4,7 @@
 //! fields, so `Foo { field, ..Default::default() }` works from outside
 //! the defining crate) instead of a bundled `.spf` fixture -- no file I/O,
 //! full control over glyph dimensions for edge cases.
+#![cfg(feature = "std")] // RgbaPrinter/ril are std-only
 
 use render_spf::*;
 use spf::core::*;
