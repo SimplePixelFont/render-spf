@@ -225,11 +225,19 @@ impl CharacterCacheU8 {
 
         // Single-byte, ASCII-only keys. Key_bytes
         // stays 1:1 aligned with abstract_characters by construction, which
-        // GlyphId(i + 1) below relies on.
-        let mut key_bytes: Vec<[u8; 1]> = Vec::with_capacity(character_table.characters.len());
-        for character in character_table.characters.iter_mut() {
+        // GlyphId(i + 1) below relies on. Only the first `abstract_characters.len()`
+        // characters have a matching glyph, so only those get a key.
+        let mut key_bytes: Vec<[u8; 1]> = Vec::with_capacity(abstract_characters.len());
+        for character in character_table
+            .characters
+            .iter_mut()
+            .take(abstract_characters.len())
+        {
             let code_points = core::mem::take(&mut character.code_points);
-            key_bytes.push([code_points.as_bytes()[0]]);
+            // 0x80 is never valid standalone UTF-8, so an empty or
+            // multi-byte-lead key is dropped by the `from_utf8` filter
+            // below without breaking index alignment.
+            key_bytes.push([code_points.as_bytes().first().copied().unwrap_or(0x80)]);
         }
         key_bytes.shrink_to_fit();
         abstract_characters.shrink_to_fit();

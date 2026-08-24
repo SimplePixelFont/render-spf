@@ -104,10 +104,6 @@ pub struct PlacedGlyph<K> {
 /// glyph's texture painted" (each backend's own paste step). A color-aware
 /// backend that can't use the generic [`RenderSurface::paste`] no-op still
 /// gets the layout math for free instead of re-deriving it.
-///
-/// `K` is generic over [`FontCache::Key`] rather than a fixed glyph-id type,
-/// since no shaping stage exists yet to produce one — today `K` is `String`
-/// (std backend) or `u8` (embedded backend).
 #[derive(Clone, Debug)]
 pub struct Placement<K> {
     pub width: u32,
