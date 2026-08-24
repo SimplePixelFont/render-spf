@@ -158,7 +158,11 @@ where
 
     for (i, key) in keys.iter().enumerate() {
         let glyph = cache.get(key).expect("character key not found in cache");
-        width += if i < last { glyph.advance_x() } else { glyph.width() };
+        width += if i < last {
+            glyph.advance_x()
+        } else {
+            glyph.width()
+        };
         natural_height = natural_height.max(glyph.height());
     }
 

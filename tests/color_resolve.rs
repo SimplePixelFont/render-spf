@@ -1,5 +1,4 @@
-//! End-to-end check that live `ColorControl` edits (Phase 2.3's FlatPalette
-//! cache) actually show up in `RgbaPrinter::render()` output across
+//! End-to-end check that live `ColorControl` edits actually show up in `RgbaPrinter::render()` output across
 //! repeated calls on the same printer -- not just on the first render.
 #![cfg(feature = "std")] // RgbaPrinter/ril are std-only
 
@@ -52,7 +51,12 @@ fn build_test_layout() -> Layout {
 }
 
 fn pixel_at(image: &ril::Image<ril::Rgba>, x: u32, y: u32) -> (u8, u8, u8, u8) {
-    let p = image.pixels().nth(y as usize).unwrap().get(x as usize).unwrap();
+    let p = image
+        .pixels()
+        .nth(y as usize)
+        .unwrap()
+        .get(x as usize)
+        .unwrap();
     (p.r, p.g, p.b, p.a)
 }
 

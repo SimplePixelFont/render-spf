@@ -223,10 +223,7 @@ impl CharacterCacheU8 {
         layout.character_tables.shrink_to_fit();
         drop(layout);
 
-        // Single-byte, ASCII-only keys — consistent with this path's
-        // existing reduced-fidelity contract (first table only, no color,
-        // no double-indirection resolution). Panics on empty code_points,
-        // same as the original implementation this replaces: key_bytes
+        // Single-byte, ASCII-only keys. Key_bytes
         // stays 1:1 aligned with abstract_characters by construction, which
         // GlyphId(i + 1) below relies on.
         let mut key_bytes: Vec<[u8; 1]> = Vec::with_capacity(character_table.characters.len());
@@ -335,7 +332,12 @@ impl EmbeddedPrinter {
     /// Maximal munch, respecting
     /// [`self.config.allow_ligatures`](GenericPrintConfig).
     pub fn shape_str(&self, text: &str) -> crate::shape::Shaped {
-        crate::shape::shape(text, &self.cache.trie, GlyphId(0), self.config.allow_ligatures)
+        crate::shape::shape(
+            text,
+            &self.cache.trie,
+            GlyphId(0),
+            self.config.allow_ligatures,
+        )
     }
 
     /// Convenience: shape and render `&str` directly. Shapes against the

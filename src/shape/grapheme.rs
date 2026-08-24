@@ -38,15 +38,16 @@ pub(crate) fn cluster_len_at(chars: &[(usize, char)], start: usize, text: &str) 
 
 /// `no_std` approximation: covers combining marks, ZWJ, variation
 /// selectors, regional indicator (flag) pairing, and Hangul jamo — the
-/// common cases, not the full UAX #29 algorithm. Documented as approximate;
-/// see the engine plan's Phase 3.3 for the tradeoff (real segmentation adds
-/// Unicode tables and wasm binary size the embedded/minimal-wasm targets
-/// don't want).
+/// common cases, not the full UAX #29 algorithm.
 #[cfg(not(feature = "std"))]
 pub(crate) fn cluster_len_at(chars: &[(usize, char)], start: usize, _text: &str) -> usize {
     let mut n = 1;
     let mut idx = start + 1;
-    let mut ri_run: u32 = if is_regional_indicator(chars[start].1) { 1 } else { 0 };
+    let mut ri_run: u32 = if is_regional_indicator(chars[start].1) {
+        1
+    } else {
+        0
+    };
 
     while idx < chars.len() {
         let c = chars[idx].1;

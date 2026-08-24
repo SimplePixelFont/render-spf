@@ -43,12 +43,6 @@ impl Default for FragmentConfig {
 /// Per-fragment records plus the pixel-indexed offsets into them, produced
 /// by [`RgbaPrinter::render_with_fragments`](super::RgbaPrinter::render_with_fragments).
 ///
-/// Replaces Phase 4's `RasterMetadata` single-owner-per-pixel model.
-/// Overlapping glyphs, and future character-pixmap layers, both produce
-/// more than one fragment for the same pixel instead of one silently
-/// overwriting the other — nothing is discarded, so nothing needs
-/// adjudicating. See `spf-engine-plan.md` 6.1.
-///
 /// # Layout
 ///
 /// Struct-of-arrays, `F` fragments long (`frag_*` fields) plus a
@@ -68,7 +62,7 @@ impl Default for FragmentConfig {
 ///
 /// Always `0` today — SPF has no character-pixmap-layer support yet. The
 /// field is reserved so the record shape doesn't change (a breaking change
-/// for every consumer) once layers land; see `spf-engine-plan.md` 6.5.
+/// for every consumer) once layers land.
 #[derive(Clone, Debug, Default)]
 pub struct FragmentSet {
     pub width: u32,
@@ -182,8 +176,7 @@ pub struct FragmentOutput {
 /// # Algorithm
 ///
 /// Two-pass counting sort, generated **row by row** so the counting/cursor
-/// scratch is `O(width)` rather than `O(width * height)` —
-/// `spf-engine-plan.md` 6.3:
+/// scratch is `O(width)`:
 ///
 /// 1. For each surface row, walk every glyph covering that row in paint
 ///    order, counting fragments per column.
@@ -217,7 +210,9 @@ pub(crate) fn generate_fragments(
             if y < placed.dst_y || y >= placed.dst_y + placed.height {
                 continue;
             }
-            let glyph = cache.get(&placed.key).expect("character key not found in cache");
+            let glyph = cache
+                .get(&placed.key)
+                .expect("character key not found in cache");
             let py = y - placed.dst_y;
             for px in 0..glyph.width {
                 let dst_x = placed.dst_x + px;
@@ -262,7 +257,9 @@ pub(crate) fn generate_fragments(
             if y < placed.dst_y || y >= placed.dst_y + placed.height {
                 continue;
             }
-            let glyph = cache.get(&placed.key).expect("character key not found in cache");
+            let glyph = cache
+                .get(&placed.key)
+                .expect("character key not found in cache");
             let py = y - placed.dst_y;
             for px in 0..glyph.width {
                 let dst_x = placed.dst_x + px;

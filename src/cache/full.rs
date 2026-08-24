@@ -109,10 +109,7 @@ impl TextureBuilder<AbstractCharacter> for RgbaTextureBuilder {
 
         // The dep-local → layout-level mapping for color tables.
         // dep_local_to_layout[i] = layout-level index for dep slot i.
-        let dep_local_to_layout: &[u8] = pixmap_table
-            .color_table_indexes
-            .as_deref()
-            .unwrap_or(&[]);
+        let dep_local_to_layout: &[u8] = pixmap_table.color_table_indexes.as_deref().unwrap_or(&[]);
 
         // Default layout-level index: first dependency color table, or 0.
         let default_layout_ct_idx = dep_local_to_layout.first().copied().unwrap_or(0);
@@ -130,7 +127,7 @@ impl TextureBuilder<AbstractCharacter> for RgbaTextureBuilder {
         let pixels: Vec<PixelRef> = palette_indices
             .iter()
             // .enumerate()
-            .map(/*|(_, &color_index)|*/|&color_index| {
+            .map(/*|(_, &color_index)|*/ |&color_index| {
                 // uncomment the enumerate and else statement and map expression when per-pixel color tables are supported
 
                 let layout_ct_idx = /*if let Some(per_pixel) = pixmap
@@ -332,7 +329,12 @@ impl RgbaPrinter {
     /// (invalidated on text/config change only, not per frame) or
     /// inspecting glyph placement without a full render.
     pub fn shape_str(&self, text: &str) -> crate::shape::Shaped {
-        crate::shape::shape(text, &self.cache.trie, GlyphId(0), self.config.allow_ligatures)
+        crate::shape::shape(
+            text,
+            &self.cache.trie,
+            GlyphId(0),
+            self.config.allow_ligatures,
+        )
     }
 
     /// Rasterise `text` onto a new [`Image<Rgba>`], resolving pixel colors
@@ -362,7 +364,13 @@ impl RgbaPrinter {
                 .cache
                 .get(&placed.key)
                 .expect("character key not found in cache");
-            paste_glyph(&mut self.colors, &mut surface, glyph, placed.dst_x, placed.dst_y);
+            paste_glyph(
+                &mut self.colors,
+                &mut surface,
+                glyph,
+                placed.dst_x,
+                placed.dst_y,
+            );
         }
 
         surface
@@ -372,13 +380,11 @@ impl RgbaPrinter {
     /// pass. Prefer [`print_str`](Self::print_str) unless a consumer (e.g. a
     /// processor pipeline) needs `char_index`/position/base color per
     /// pixel, or per-pixel multi-source access where glyphs overlap.
-    ///
-    /// Replaces Phase 4's `print_str_with_metadata`/`RasterMetadata`: those
-    /// silently overwrote a contested pixel's metadata with whichever
-    /// glyph drew last, even when an earlier glyph's ink was what actually
-    /// stayed visible. Fragments keep every source instead of discarding
-    /// one — see `spf-engine-plan.md` 6.1.
-    pub fn print_str_with_fragments(&mut self, text: &str, frag_config: &FragmentConfig) -> FragmentOutput {
+    pub fn print_str_with_fragments(
+        &mut self,
+        text: &str,
+        frag_config: &FragmentConfig,
+    ) -> FragmentOutput {
         let shaped = self.shape_str(text);
         self.render_with_fragments(&shaped.glyphs, frag_config)
     }
@@ -389,7 +395,11 @@ impl RgbaPrinter {
     /// covered rect area (times layer count, once layers exist) that
     /// `render` doesn't pay for; see [`FragmentConfig::include_rect_only`]
     /// to trim that cost when only ink matters.
-    pub fn render_with_fragments(&mut self, keys: &[GlyphId], frag_config: &FragmentConfig) -> FragmentOutput {
+    pub fn render_with_fragments(
+        &mut self,
+        keys: &[GlyphId],
+        frag_config: &FragmentConfig,
+    ) -> FragmentOutput {
         let placement = layout(keys, &self.config, &self.cache);
         let fragments = generate_fragments(&mut self.colors, &self.cache, &placement, frag_config);
         let surface = composite_surface(&fragments);
@@ -401,7 +411,13 @@ impl RgbaPrinter {
 /// [`PixelRef`] through `colors`. A free function (not an `RgbaPrinter`
 /// method) so callers can borrow it disjointly from `self.cache` — see
 /// [`RgbaPrinter::render`].
-fn paste_glyph(colors: &mut ColorControl, surface: &mut Image<Rgba>, glyph: &AbstractCharacter, x: u32, y: u32) {
+fn paste_glyph(
+    colors: &mut ColorControl,
+    surface: &mut Image<Rgba>,
+    glyph: &AbstractCharacter,
+    x: u32,
+    y: u32,
+) {
     for py in 0..glyph.height {
         for px in 0..glyph.width {
             let pixel_idx = (py * glyph.width + px) as usize;

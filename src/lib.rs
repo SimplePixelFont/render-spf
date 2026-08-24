@@ -32,14 +32,12 @@ pub use print::*;
 pub mod shape;
 pub use shape::*;
 
-// Not std-gated: generic_update_cache requires a &mut ColorControl for both
-// backends (the embedded/no_std one discards it immediately — it's
-// monochrome — but still needs the type available to satisfy the shared
-// signature). color.rs itself has no std-only dependencies.
 pub mod color;
 pub use color::{ColorControl, ColorEntry, ColorType, PixelRef};
 
 pub mod cache;
-pub use cache::{find_font, font_names, FontCache, Printer, EmbeddedPrinter};
 #[cfg(feature = "std")]
-pub use cache::{composite_from, FragmentConfig, FragmentFlags, FragmentOutput, FragmentSet, RgbaPrinter};
+pub use cache::{
+    composite_from, FragmentConfig, FragmentFlags, FragmentOutput, FragmentSet, RgbaPrinter,
+};
+pub use cache::{find_font, font_names, EmbeddedPrinter, FontCache, Printer};

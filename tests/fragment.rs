@@ -1,6 +1,5 @@
 //! Tests for `RgbaPrinter::render_with_fragments`/`print_str_with_fragments`
-//! (Phase 6's fragment model, replacing Phase 4's `RasterMetadata`). Uses
-//! synthetic in-memory `Layout`s (see `tests/placement.rs` for why
+//! Uses synthetic in-memory `Layout`s (see `tests/placement.rs` for why
 //! `Default::default()` + field assignment is used instead of a struct
 //! literal).
 #![cfg(feature = "std")] // RgbaPrinter/ril are std-only
@@ -132,7 +131,10 @@ fn overlap_column_carries_both_glyphs_as_separate_fragments() {
     assert_eq!(f.frag_char_index[start], 0);
     assert_eq!(f.frag_char_x[start], 0);
     assert_eq!(f.frag_char_y[start], 0);
-    assert_eq!(f.frag_flags[start] & FragmentFlags::INKED, FragmentFlags::INKED);
+    assert_eq!(
+        f.frag_flags[start] & FragmentFlags::INKED,
+        FragmentFlags::INKED
+    );
     assert_eq!(f.composite(0), [255, 0, 0, 255]);
 
     // x=1: overlap column. Both A's opaque red and B's transparent-white
@@ -147,7 +149,10 @@ fn overlap_column_carries_both_glyphs_as_separate_fragments() {
     assert_eq!(f.frag_char_x[start], 1);
     assert_eq!(f.frag_char_y[start], 0);
     assert_eq!(f.frag_rgba[start], [255, 0, 0, 255]);
-    assert_eq!(f.frag_flags[start] & FragmentFlags::INKED, FragmentFlags::INKED);
+    assert_eq!(
+        f.frag_flags[start] & FragmentFlags::INKED,
+        FragmentFlags::INKED
+    );
 
     // Fragment 1: B's first pixel, transparent white, rect-only.
     assert_eq!(f.frag_char_index[start + 1], 1);
@@ -275,7 +280,12 @@ fn render_with_fragments_composited_surface_agrees_with_render() {
     assert_eq!(plain.height(), fused.surface.height());
     for y in 0..plain.height() {
         for x in 0..plain.width() {
-            let a = plain.pixels().nth(y as usize).unwrap().get(x as usize).unwrap();
+            let a = plain
+                .pixels()
+                .nth(y as usize)
+                .unwrap()
+                .get(x as usize)
+                .unwrap();
             let b = fused
                 .surface
                 .pixels()

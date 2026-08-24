@@ -1,9 +1,5 @@
 use crate::{vec, Vec};
 
-// ---------------------------------------------------------------------------
-// ColorType
-// ---------------------------------------------------------------------------
-
 /// Signals the intended mutability of a color entry.
 ///
 /// - [`Dynamic`](ColorType::Dynamic) — a deliberate customisation point.
@@ -17,10 +13,6 @@ pub enum ColorType {
     Dynamic,
     Absolute,
 }
-
-// ---------------------------------------------------------------------------
-// ColorEntry
-// ---------------------------------------------------------------------------
 
 /// A single entry in the live color palette.
 ///
@@ -64,7 +56,12 @@ impl ColorEntry {
 
     /// Returns the original SPF-defined RGBA value.
     pub fn original(&self) -> (u8, u8, u8, u8) {
-        (self.original_r, self.original_g, self.original_b, self.original_a)
+        (
+            self.original_r,
+            self.original_g,
+            self.original_b,
+            self.original_a,
+        )
     }
 
     /// Returns the current RGBA value used at render time.
@@ -72,10 +69,6 @@ impl ColorEntry {
         (self.r, self.g, self.b, self.a)
     }
 }
-
-// ---------------------------------------------------------------------------
-// ColorControl
-// ---------------------------------------------------------------------------
 
 /// The live color palette for an [`RgbaPrinter`](crate::cache::RgbaPrinter).
 ///
@@ -282,26 +275,9 @@ impl ColorControl {
     }
 }
 
-// ---------------------------------------------------------------------------
-// FlatPalette
-// ---------------------------------------------------------------------------
-
 /// A flattened render-time view of [`ColorControl::tables`]: one `offsets`
 /// entry per table (plus a trailing sentinel) into a single concatenated
 /// `colors` array, in table order.
-///
-/// Replaces the nested `Vec<Vec<ColorEntry>>` pointer-chase — a dependent
-/// allocation-to-allocation hop per pixel — with two reads into small,
-/// densely-packed arrays. Semantics are identical to walking `tables`
-/// directly: same two-level table/index indexing, same
-/// out-of-range-returns-transparent-black behaviour. Only the indirection
-/// mechanism changes.
-///
-/// Deliberately not a dense `(table << 8) | index` LUT: that's a fixed
-/// 256×256×4 = 256KB allocation regardless of how many colors a font
-/// actually defines, and worse for cache/TLB behaviour than this compact
-/// form — real fonts use a handful of colors across a handful of tables,
-/// and this stays proportional to that.
 #[derive(Debug, Clone, Default)]
 struct FlatPalette {
     /// `offsets[t]..offsets[t + 1]` is table `t`'s slice of `colors`.
@@ -348,10 +324,6 @@ impl FlatPalette {
         (r, g, b, a)
     }
 }
-
-// ---------------------------------------------------------------------------
-// PixelRef
-// ---------------------------------------------------------------------------
 
 /// A reference to a single pixel's color in the layout-level color table space.
 ///
@@ -411,20 +383,32 @@ mod tests {
     fn flat_palette_matches_nested_resolution_across_tables() {
         let mut control = two_table_control();
         assert_eq!(
-            control.resolve(PixelRef { color_table_index: 0, color_index: 0 }),
+            control.resolve(PixelRef {
+                color_table_index: 0,
+                color_index: 0
+            }),
             (255, 0, 0, 255)
         );
         assert_eq!(
-            control.resolve(PixelRef { color_table_index: 0, color_index: 1 }),
+            control.resolve(PixelRef {
+                color_table_index: 0,
+                color_index: 1
+            }),
             (0, 255, 0, 255)
         );
         // Table 1's offset must land after all of table 0's entries.
         assert_eq!(
-            control.resolve(PixelRef { color_table_index: 1, color_index: 0 }),
+            control.resolve(PixelRef {
+                color_table_index: 1,
+                color_index: 0
+            }),
             (0, 0, 255, 255)
         );
         assert_eq!(
-            control.resolve(PixelRef { color_table_index: 1, color_index: 2 }),
+            control.resolve(PixelRef {
+                color_table_index: 1,
+                color_index: 2
+            }),
             (40, 50, 60, 255)
         );
     }
@@ -434,12 +418,18 @@ mod tests {
         let mut control = two_table_control();
         // Out-of-range index within a valid table.
         assert_eq!(
-            control.resolve(PixelRef { color_table_index: 0, color_index: 5 }),
+            control.resolve(PixelRef {
+                color_table_index: 0,
+                color_index: 5
+            }),
             (0, 0, 0, 0)
         );
         // Out-of-range table entirely.
         assert_eq!(
-            control.resolve(PixelRef { color_table_index: 9, color_index: 0 }),
+            control.resolve(PixelRef {
+                color_table_index: 9,
+                color_index: 0
+            }),
             (0, 0, 0, 0)
         );
     }
@@ -448,20 +438,29 @@ mod tests {
     fn dirty_flag_starts_true_and_clears_after_first_resolve() {
         let mut control = two_table_control();
         assert!(control.dirty);
-        control.resolve(PixelRef { color_table_index: 0, color_index: 0 });
+        control.resolve(PixelRef {
+            color_table_index: 0,
+            color_index: 0,
+        });
         assert!(!control.dirty);
     }
 
     #[test]
     fn set_marks_dirty_and_is_reflected_on_next_resolve() {
         let mut control = two_table_control();
-        control.resolve(PixelRef { color_table_index: 0, color_index: 0 }); // warm the cache
+        control.resolve(PixelRef {
+            color_table_index: 0,
+            color_index: 0,
+        }); // warm the cache
         assert!(!control.dirty);
 
         control.set(0, 0, 9, 9, 9, 9);
         assert!(control.dirty);
         assert_eq!(
-            control.resolve(PixelRef { color_table_index: 0, color_index: 0 }),
+            control.resolve(PixelRef {
+                color_table_index: 0,
+                color_index: 0
+            }),
             (9, 9, 9, 9)
         );
         assert!(!control.dirty);
@@ -475,11 +474,17 @@ mod tests {
         control.reset_dynamic();
 
         assert_eq!(
-            control.resolve(PixelRef { color_table_index: 0, color_index: 0 }),
+            control.resolve(PixelRef {
+                color_table_index: 0,
+                color_index: 0
+            }),
             (255, 0, 0, 255) // Dynamic: reverted
         );
         assert_eq!(
-            control.resolve(PixelRef { color_table_index: 0, color_index: 1 }),
+            control.resolve(PixelRef {
+                color_table_index: 0,
+                color_index: 1
+            }),
             (2, 2, 2, 2) // Absolute: left as overridden
         );
     }
@@ -492,11 +497,17 @@ mod tests {
         control.reset_all();
 
         assert_eq!(
-            control.resolve(PixelRef { color_table_index: 0, color_index: 0 }),
+            control.resolve(PixelRef {
+                color_table_index: 0,
+                color_index: 0
+            }),
             (255, 0, 0, 255)
         );
         assert_eq!(
-            control.resolve(PixelRef { color_table_index: 0, color_index: 1 }),
+            control.resolve(PixelRef {
+                color_table_index: 0,
+                color_index: 1
+            }),
             (0, 255, 0, 255)
         );
     }
