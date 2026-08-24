@@ -27,7 +27,7 @@ impl<K, V> VecMap<K, V> {
         }
     }
 
-    pub(crate) fn insert(&mut self, key: K, value: V) {
+    pub fn insert(&mut self, key: K, value: V) {
         self.keys.push(key);
         self.values.push(value);
     }

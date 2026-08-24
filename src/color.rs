@@ -1,8 +1,4 @@
-use crate::Vec;
-
-// ---------------------------------------------------------------------------
-// ColorType
-// ---------------------------------------------------------------------------
+use crate::{vec, Vec};
 
 /// Signals the intended mutability of a color entry.
 ///
@@ -17,10 +13,6 @@ pub enum ColorType {
     Dynamic,
     Absolute,
 }
-
-// ---------------------------------------------------------------------------
-// ColorEntry
-// ---------------------------------------------------------------------------
 
 /// A single entry in the live color palette.
 ///
@@ -64,7 +56,12 @@ impl ColorEntry {
 
     /// Returns the original SPF-defined RGBA value.
     pub fn original(&self) -> (u8, u8, u8, u8) {
-        (self.original_r, self.original_g, self.original_b, self.original_a)
+        (
+            self.original_r,
+            self.original_g,
+            self.original_b,
+            self.original_a,
+        )
     }
 
     /// Returns the current RGBA value used at render time.
@@ -72,10 +69,6 @@ impl ColorEntry {
         (self.r, self.g, self.b, self.a)
     }
 }
-
-// ---------------------------------------------------------------------------
-// ColorControl
-// ---------------------------------------------------------------------------
 
 /// The live color palette for an [`RgbaPrinter`](crate::cache::RgbaPrinter).
 ///
@@ -122,12 +115,43 @@ impl ColorEntry {
 ///
 /// let image = printer.print_str("Hello");
 /// ```
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ColorControl {
     /// One `Vec<ColorEntry>` per layout-level color table.
     /// Indexed directly by layout color table index.
     /// Empty inner `Vec`s represent color tables not used by this font.
+    ///
+    /// Mutating a `ColorEntry`'s color in place (rather than through
+    /// [`set`](Self::set)/[`reset`](Self::reset)/etc.) or structurally
+    /// changing a table's length (push/remove) does **not** invalidate
+    /// [`resolve`](Self::resolve)'s render-time cache — use the methods
+    /// below for anything that needs to show up in the next render. A
+    /// structural length change also shifts which table wins pixel
+    /// resolution elsewhere in the font (`color_table_index` is baked into
+    /// each glyph's pixels at cache-build time), which needs a full glyph
+    /// cache reload regardless of this cache, so it's never safe to do
+    /// live without one.
     pub tables: Vec<Vec<ColorEntry>>,
+
+    /// Render-time cache, rebuilt lazily on the next [`resolve`](Self::resolve)
+    /// call after [`dirty`](Self::dirty) is set. See [`FlatPalette`].
+    ///
+    /// Plain fields, not interior mutability: `resolve` takes `&mut self`
+    /// instead. `Cell`/`RefCell` are `!Sync`, which would make `ColorControl`
+    /// (and so `RgbaPrinter`) unusable inside a `static ... RwLock<...>`
+    /// font registry — exactly how web-spf stores printers.
+    flat: FlatPalette,
+    dirty: bool,
+}
+
+impl Default for ColorControl {
+    fn default() -> Self {
+        Self {
+            tables: Vec::new(),
+            flat: FlatPalette::default(),
+            dirty: true,
+        }
+    }
 }
 
 impl ColorControl {
@@ -136,6 +160,8 @@ impl ColorControl {
     pub fn with_capacity(layout_color_table_count: usize) -> Self {
         Self {
             tables: vec![Vec::new(); layout_color_table_count],
+            flat: FlatPalette::default(),
+            dirty: true,
         }
     }
 
@@ -152,6 +178,7 @@ impl ColorControl {
             entry.g = g;
             entry.b = b;
             entry.a = a;
+            self.dirty = true;
         }
     }
 
@@ -163,6 +190,7 @@ impl ColorControl {
             entry.g = entry.original_g;
             entry.b = entry.original_b;
             entry.a = entry.original_a;
+            self.dirty = true;
         }
     }
 
@@ -181,6 +209,7 @@ impl ColorControl {
                 }
             }
         }
+        self.dirty = true;
     }
 
     /// Reset all entries (Dynamic and Absolute) to their original values.
@@ -193,6 +222,7 @@ impl ColorControl {
                 entry.a = entry.original_a;
             }
         }
+        self.dirty = true;
     }
 
     /// Iterate [`Dynamic`](ColorType::Dynamic) entries in a layout-level
@@ -227,28 +257,82 @@ impl ColorControl {
 
     /// Resolve a [`PixelRef`] to its current RGBA value.
     ///
-    /// `pixel.color_table_index` is a layout-level index, so resolution is
-    /// a direct array lookup with no additional indirection.
+    /// `pixel.color_table_index` is a layout-level index. Reads are served
+    /// from the [`FlatPalette`] render-time cache, rebuilt here on first
+    /// use after any of [`set`](Self::set)/[`reset`](Self::reset)/
+    /// [`reset_dynamic`](Self::reset_dynamic)/[`reset_all`](Self::reset_all)
+    /// — not on every call, and not per-pixel. Takes `&mut self` (plain
+    /// fields, not interior mutability) purely so the cache can be
+    /// rebuilt in place — see the note on [`flat`](Self::flat)'s field docs.
     /// Returns transparent black for out-of-range references rather than panicking.
     #[inline]
-    pub(crate) fn resolve(&self, pixel: PixelRef) -> (u8, u8, u8, u8) {
-        self.tables
-            .get(pixel.color_table_index as usize)
-            .and_then(|t| t.get(pixel.color_index as usize))
-            .map(|e| (e.r, e.g, e.b, e.a))
-            .unwrap_or((0, 0, 0, 0))
+    pub(crate) fn resolve(&mut self, pixel: PixelRef) -> (u8, u8, u8, u8) {
+        if self.dirty {
+            self.flat = FlatPalette::rebuild(&self.tables);
+            self.dirty = false;
+        }
+        self.flat.resolve(pixel)
     }
 }
 
-// ---------------------------------------------------------------------------
-// PixelRef
-// ---------------------------------------------------------------------------
+/// A flattened render-time view of [`ColorControl::tables`]: one `offsets`
+/// entry per table (plus a trailing sentinel) into a single concatenated
+/// `colors` array, in table order.
+#[derive(Debug, Clone, Default)]
+struct FlatPalette {
+    /// `offsets[t]..offsets[t + 1]` is table `t`'s slice of `colors`.
+    /// Length is always `tables.len() + 1`.
+    offsets: Vec<u32>,
+    /// Every table's entries, concatenated in table order.
+    colors: Vec<[u8; 4]>,
+}
+
+impl FlatPalette {
+    fn rebuild(tables: &[Vec<ColorEntry>]) -> Self {
+        let mut offsets = Vec::with_capacity(tables.len() + 1);
+        let mut colors = Vec::new();
+
+        offsets.push(0);
+        for table in tables {
+            for entry in table {
+                colors.push([entry.r, entry.g, entry.b, entry.a]);
+            }
+            offsets.push(colors.len() as u32);
+        }
+
+        Self { offsets, colors }
+    }
+
+    #[inline]
+    fn resolve(&self, pixel: PixelRef) -> (u8, u8, u8, u8) {
+        let table = pixel.color_table_index as usize;
+        let index = pixel.color_index as usize;
+
+        let Some(&base) = self.offsets.get(table) else {
+            return (0, 0, 0, 0);
+        };
+        let Some(&end) = self.offsets.get(table + 1) else {
+            return (0, 0, 0, 0);
+        };
+
+        let base = base as usize;
+        if index >= (end as usize - base) {
+            return (0, 0, 0, 0);
+        }
+
+        let [r, g, b, a] = self.colors[base + index];
+        (r, g, b, a)
+    }
+}
 
 /// A reference to a single pixel's color in the layout-level color table space.
 ///
 /// Stored inside [`AbstractCharacter::pixels`](crate::cache::AbstractCharacter)
 /// instead of baked RGBA values, so that mutating a [`ColorControl`] entry
-/// is immediately reflected on the next render call with no cache invalidation.
+/// via [`set`](ColorControl::set)/[`reset`](ColorControl::reset)/etc. is
+/// reflected on the next render call — cache invalidation for
+/// [`ColorControl`]'s internal [`FlatPalette`] happens automatically inside
+/// those methods, not something a caller needs to trigger.
 ///
 /// # Index semantics
 ///
@@ -271,4 +355,160 @@ pub struct PixelRef {
 
     /// Index into the selected color table's palette entries.
     pub color_index: u8,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_entry(color_type: ColorType, r: u8, g: u8, b: u8) -> ColorEntry {
+        ColorEntry::new(color_type, r, g, b, 255)
+    }
+
+    fn two_table_control() -> ColorControl {
+        let mut control = ColorControl::with_capacity(2);
+        control.tables[0] = vec![
+            make_entry(ColorType::Dynamic, 255, 0, 0),
+            make_entry(ColorType::Absolute, 0, 255, 0),
+        ];
+        control.tables[1] = vec![
+            make_entry(ColorType::Dynamic, 0, 0, 255),
+            make_entry(ColorType::Dynamic, 10, 20, 30),
+            make_entry(ColorType::Dynamic, 40, 50, 60),
+        ];
+        control
+    }
+
+    #[test]
+    fn flat_palette_matches_nested_resolution_across_tables() {
+        let mut control = two_table_control();
+        assert_eq!(
+            control.resolve(PixelRef {
+                color_table_index: 0,
+                color_index: 0
+            }),
+            (255, 0, 0, 255)
+        );
+        assert_eq!(
+            control.resolve(PixelRef {
+                color_table_index: 0,
+                color_index: 1
+            }),
+            (0, 255, 0, 255)
+        );
+        // Table 1's offset must land after all of table 0's entries.
+        assert_eq!(
+            control.resolve(PixelRef {
+                color_table_index: 1,
+                color_index: 0
+            }),
+            (0, 0, 255, 255)
+        );
+        assert_eq!(
+            control.resolve(PixelRef {
+                color_table_index: 1,
+                color_index: 2
+            }),
+            (40, 50, 60, 255)
+        );
+    }
+
+    #[test]
+    fn flat_palette_out_of_range_returns_transparent_black() {
+        let mut control = two_table_control();
+        // Out-of-range index within a valid table.
+        assert_eq!(
+            control.resolve(PixelRef {
+                color_table_index: 0,
+                color_index: 5
+            }),
+            (0, 0, 0, 0)
+        );
+        // Out-of-range table entirely.
+        assert_eq!(
+            control.resolve(PixelRef {
+                color_table_index: 9,
+                color_index: 0
+            }),
+            (0, 0, 0, 0)
+        );
+    }
+
+    #[test]
+    fn dirty_flag_starts_true_and_clears_after_first_resolve() {
+        let mut control = two_table_control();
+        assert!(control.dirty);
+        control.resolve(PixelRef {
+            color_table_index: 0,
+            color_index: 0,
+        });
+        assert!(!control.dirty);
+    }
+
+    #[test]
+    fn set_marks_dirty_and_is_reflected_on_next_resolve() {
+        let mut control = two_table_control();
+        control.resolve(PixelRef {
+            color_table_index: 0,
+            color_index: 0,
+        }); // warm the cache
+        assert!(!control.dirty);
+
+        control.set(0, 0, 9, 9, 9, 9);
+        assert!(control.dirty);
+        assert_eq!(
+            control.resolve(PixelRef {
+                color_table_index: 0,
+                color_index: 0
+            }),
+            (9, 9, 9, 9)
+        );
+        assert!(!control.dirty);
+    }
+
+    #[test]
+    fn reset_dynamic_leaves_absolute_entries_unchanged() {
+        let mut control = two_table_control();
+        control.set(0, 0, 1, 1, 1, 1); // Dynamic entry
+        control.set(0, 1, 2, 2, 2, 2); // Absolute entry
+        control.reset_dynamic();
+
+        assert_eq!(
+            control.resolve(PixelRef {
+                color_table_index: 0,
+                color_index: 0
+            }),
+            (255, 0, 0, 255) // Dynamic: reverted
+        );
+        assert_eq!(
+            control.resolve(PixelRef {
+                color_table_index: 0,
+                color_index: 1
+            }),
+            (2, 2, 2, 2) // Absolute: left as overridden
+        );
+    }
+
+    #[test]
+    fn reset_all_reverts_dynamic_and_absolute() {
+        let mut control = two_table_control();
+        control.set(0, 0, 1, 1, 1, 1);
+        control.set(0, 1, 2, 2, 2, 2);
+        control.reset_all();
+
+        assert_eq!(
+            control.resolve(PixelRef {
+                color_table_index: 0,
+                color_index: 0
+            }),
+            (255, 0, 0, 255)
+        );
+        assert_eq!(
+            control.resolve(PixelRef {
+                color_table_index: 0,
+                color_index: 1
+            }),
+            (0, 255, 0, 255)
+        );
+    }
 }

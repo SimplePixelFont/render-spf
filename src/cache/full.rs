@@ -1,17 +1,20 @@
 #![cfg(feature = "std")]
 
 use bitvec::{field::BitField, order::Lsb0, view::BitView};
-use hashbrown::HashMap;
 use ril::{Image, Rgba};
 use spf::core::{Character, Font, FontTable, Layout, Pixmap, PixmapTable};
 
 use crate::{
     color::{ColorControl, PixelRef},
-    print::{GenericPrintConfig, RenderSurface, RenderableTexture, VerticalAlign},
-    String, Vec,
+    print::{layout, GenericPrintConfig, RenderSurface, RenderableTexture},
+    shape::is_multi_cluster,
+    GlyphId, String, Trie, Vec,
 };
 
-use super::{find_font, generic_update_cache, FontCache, TextureBuilder};
+use super::{
+    composite_surface, find_font, generate_fragments, generic_update_cache, FontCache,
+    FragmentConfig, FragmentOutput, TextureBuilder,
+};
 
 /// A single full-colour glyph for `std` targets.
 ///
@@ -106,10 +109,7 @@ impl TextureBuilder<AbstractCharacter> for RgbaTextureBuilder {
 
         // The dep-local → layout-level mapping for color tables.
         // dep_local_to_layout[i] = layout-level index for dep slot i.
-        let dep_local_to_layout: &[u8] = pixmap_table
-            .color_table_indexes
-            .as_deref()
-            .unwrap_or(&[]);
+        let dep_local_to_layout: &[u8] = pixmap_table.color_table_indexes.as_deref().unwrap_or(&[]);
 
         // Default layout-level index: first dependency color table, or 0.
         let default_layout_ct_idx = dep_local_to_layout.first().copied().unwrap_or(0);
@@ -127,7 +127,7 @@ impl TextureBuilder<AbstractCharacter> for RgbaTextureBuilder {
         let pixels: Vec<PixelRef> = palette_indices
             .iter()
             // .enumerate()
-            .map(/*|(_, &color_index)|*/|&color_index| {
+            .map(/*|(_, &color_index)|*/ |&color_index| {
                 // uncomment the enumerate and else statement and map expression when per-pixel color tables are supported
 
                 let layout_ct_idx = /*if let Some(per_pixel) = pixmap
@@ -169,11 +169,16 @@ impl TextureBuilder<AbstractCharacter> for RgbaTextureBuilder {
 
 /// Character cache for `std` targets.
 ///
-/// Keyed by the full grapheme cluster [`String`], backed by [`HashMap`] for
-/// O(1) average-case lookups. Supports multi-byte grapheme clusters.
+/// Glyphs are stored flat, indexed directly by [`GlyphId`]; [`Trie`] maps
+/// codepoint sequences (including multi-codepoint ligatures) to that index.
+/// Index 0 is always a reserved blank glyph — [`shape`](crate::shape)'s
+/// `notdef` fallback for a font with no match at all at some position, so a
+/// total lookup failure degrades to a blank box instead of panicking on
+/// [`FontCache::get`].
 #[derive(Clone, Default)]
 pub struct CharacterCacheImpl {
-    pub(crate) mappings: HashMap<String, AbstractCharacter>,
+    pub(crate) glyphs: Vec<AbstractCharacter>,
+    pub(crate) trie: Trie,
     pub(crate) max_height: u32,
 }
 
@@ -198,30 +203,48 @@ impl CharacterCacheImpl {
         // referenced by this font remain empty.
         let mut color_control = ColorControl::with_capacity(layout.color_tables.len());
 
+        // Reserve index 0 as the notdef fallback before any real glyph.
+        self.glyphs.push(AbstractCharacter::default());
+
+        let mut trie_entries: Vec<(String, GlyphId, bool)> = Vec::new();
+
         generic_update_cache(
             font_table,
             font,
             layout,
             &RgbaTextureBuilder,
             &mut color_control,
-            |grapheme| grapheme.to_owned(),
-            |key, glyph: AbstractCharacter| {
+            |code_points, glyph: AbstractCharacter| {
                 self.track_height(&glyph);
-                self.mappings.insert(key, glyph);
+                let id = GlyphId(self.glyphs.len() as u32);
+                self.glyphs.push(glyph);
+                // An empty code_points would insert a zero-length trie key,
+                // which shape()'s descent can never actually reach past the
+                // root -- skip it rather than build an unreachable entry.
+                if !code_points.is_empty() {
+                    let is_ligature = is_multi_cluster(code_points);
+                    trie_entries.push((code_points.to_owned(), id, is_ligature));
+                }
             },
         );
+
+        let entry_refs: Vec<(&str, GlyphId, bool)> = trie_entries
+            .iter()
+            .map(|(key, id, is_ligature)| (key.as_str(), *id, *is_ligature))
+            .collect();
+        self.trie = Trie::build(&entry_refs);
 
         color_control
     }
 }
 
 impl FontCache for CharacterCacheImpl {
-    type Key = String;
+    type Key = GlyphId;
     type Glyph = AbstractCharacter;
     type Surface = Image<Rgba>;
 
-    fn get(&self, key: &String) -> Option<&AbstractCharacter> {
-        self.mappings.get(key)
+    fn get(&self, key: &GlyphId) -> Option<&AbstractCharacter> {
+        self.glyphs.get(key.0 as usize)
     }
 
     fn max_height(&self) -> u32 {
@@ -299,81 +322,113 @@ impl RgbaPrinter {
         Some(Self::from_font(font_table, font, layout, config))
     }
 
-    /// Rasterise `text` onto a new [`Image<Rgba>`], resolving pixel colors
-    /// through the current state of [`self.colors`](Self::colors).
-    pub fn print_str(&self, text: &str) -> Image<Rgba> {
-        let keys: Vec<String> = text.chars().map(|c| c.to_string()).collect();
-        self.render(&keys)
+    /// Shape `text` against this printer's font without rendering it.
+    /// Maximal munch, respecting
+    /// [`self.config.allow_ligatures`](GenericPrintConfig). Useful for
+    /// caching a [`Shaped`](crate::shape::Shaped) across repeated renders
+    /// (invalidated on text/config change only, not per frame) or
+    /// inspecting glyph placement without a full render.
+    pub fn shape_str(&self, text: &str) -> crate::shape::Shaped {
+        crate::shape::shape(
+            text,
+            &self.cache.trie,
+            GlyphId(0),
+            self.config.allow_ligatures,
+        )
     }
 
-    /// Rasterise a pre-built key slice onto a new [`Image<Rgba>`].
-    pub fn render(&self, keys: &[String]) -> Image<Rgba> {
-        if keys.is_empty() {
-            return Image::new(0, 0, Rgba::transparent());
-        }
+    /// Rasterise `text` onto a new [`Image<Rgba>`], resolving pixel colors
+    /// through the current state of [`self.colors`](Self::colors).
+    ///
+    /// Takes `&mut self`: [`ColorControl::resolve`] rebuilds its render-time
+    /// cache in place when the palette has changed since the last call.
+    pub fn print_str(&mut self, text: &str) -> Image<Rgba> {
+        let shaped = self.shape_str(text);
+        self.render(&shaped.glyphs)
+    }
 
-        let last = keys.len() - 1;
+    /// Rasterise a pre-shaped glyph slice onto a new [`Image<Rgba>`]. Prefer
+    /// [`print_str`](Self::print_str) unless you already have `Shaped`
+    /// glyphs from elsewhere (e.g. a cached shape from a previous call).
+    pub fn render(&mut self, keys: &[GlyphId]) -> Image<Rgba> {
+        let placement = layout(keys, &self.config, &self.cache);
+        let mut surface = Image::new(placement.width, placement.height, Rgba::transparent());
 
-        let mut width: u32 = last as u32 * self.config.letter_spacing as u32;
-        let mut height: u32 = 0;
-
-        for (i, key) in keys.iter().enumerate() {
+        for placed in &placement.glyphs {
+            // Disjoint field borrows: self.cache immutably (for glyph) and
+            // self.colors mutably (for paste_glyph), side by side. paste_glyph
+            // takes colors as an explicit parameter rather than &mut self so
+            // the borrow checker sees these as the separate fields they are,
+            // instead of two competing borrows of the whole RgbaPrinter.
             let glyph = self
                 .cache
-                .get(key)
+                .get(&placed.key)
                 .expect("character key not found in cache");
-            width += if i < last {
-                glyph.advance_x
-            } else {
-                glyph.width
-            };
-            height = height.max(glyph.height);
-        }
-
-        if self.config.vertical_expand {
-            height = self.cache.max_height();
-        }
-
-        let offset_y: u32 = if self.config.vertical_expand {
-            match self.config.vertical_align {
-                VerticalAlign::Top => 0,
-                VerticalAlign::Middle => self.cache.max_height().saturating_sub(height) / 2,
-                VerticalAlign::Bottom => self.cache.max_height().saturating_sub(height),
-            }
-        } else {
-            0
-        };
-
-        let mut surface = Image::new(width, height, Rgba::transparent());
-        let mut current_x: u32 = 0;
-
-        for key in keys {
-            let glyph = self
-                .cache
-                .get(key)
-                .expect("character key not found in cache");
-            self.paste_glyph(&mut surface, glyph, current_x, offset_y);
-            current_x += glyph.advance_x + self.config.letter_spacing as u32;
+            paste_glyph(
+                &mut self.colors,
+                &mut surface,
+                glyph,
+                placed.dst_x,
+                placed.dst_y,
+            );
         }
 
         surface
     }
 
-    /// Composite a single glyph onto `surface` at (x, y), resolving each
-    /// [`PixelRef`] through [`self.colors`](Self::colors).
-    fn paste_glyph(&self, surface: &mut Image<Rgba>, glyph: &AbstractCharacter, x: u32, y: u32) {
-        for py in 0..glyph.height {
-            for px in 0..glyph.width {
-                let pixel_idx = (py * glyph.width + px) as usize;
-                if let Some(&pixel_ref) = glyph.pixels.get(pixel_idx) {
-                    let (r, g, b, a) = self.colors.resolve(pixel_ref);
-                    if a == 0 {
-                        continue;
-                    }
-                    let (dst_x, dst_y) = (x + px, y + py);
-                    if dst_x < surface.width() && dst_y < surface.height() {
-                        surface.set_pixel(dst_x, dst_y, Rgba { r, g, b, a });
-                    }
+    /// Shape and rasterise `text`, producing a `FragmentSet` in the same
+    /// pass. Prefer [`print_str`](Self::print_str) unless a consumer (e.g. a
+    /// processor pipeline) needs `char_index`/position/base color per
+    /// pixel, or per-pixel multi-source access where glyphs overlap.
+    pub fn print_str_with_fragments(
+        &mut self,
+        text: &str,
+        frag_config: &FragmentConfig,
+    ) -> FragmentOutput {
+        let shaped = self.shape_str(text);
+        self.render_with_fragments(&shaped.glyphs, frag_config)
+    }
+
+    /// Rasterise a pre-shaped glyph slice, producing a `FragmentSet` in
+    /// the same pass. Prefer [`render`](Self::render) when fragments
+    /// aren't needed — the fragment buffers cost proportionally to total
+    /// covered rect area (times layer count, once layers exist) that
+    /// `render` doesn't pay for; see [`FragmentConfig::include_rect_only`]
+    /// to trim that cost when only ink matters.
+    pub fn render_with_fragments(
+        &mut self,
+        keys: &[GlyphId],
+        frag_config: &FragmentConfig,
+    ) -> FragmentOutput {
+        let placement = layout(keys, &self.config, &self.cache);
+        let fragments = generate_fragments(&mut self.colors, &self.cache, &placement, frag_config);
+        let surface = composite_surface(&fragments);
+        FragmentOutput { surface, fragments }
+    }
+}
+
+/// Composite a single glyph onto `surface` at (x, y), resolving each
+/// [`PixelRef`] through `colors`. A free function (not an `RgbaPrinter`
+/// method) so callers can borrow it disjointly from `self.cache` — see
+/// [`RgbaPrinter::render`].
+fn paste_glyph(
+    colors: &mut ColorControl,
+    surface: &mut Image<Rgba>,
+    glyph: &AbstractCharacter,
+    x: u32,
+    y: u32,
+) {
+    for py in 0..glyph.height {
+        for px in 0..glyph.width {
+            let pixel_idx = (py * glyph.width + px) as usize;
+            if let Some(&pixel_ref) = glyph.pixels.get(pixel_idx) {
+                let (r, g, b, a) = colors.resolve(pixel_ref);
+                if a == 0 {
+                    continue;
+                }
+                let (dst_x, dst_y) = (x + px, y + py);
+                if dst_x < surface.width() && dst_y < surface.height() {
+                    surface.set_pixel(dst_x, dst_y, Rgba { r, g, b, a });
                 }
             }
         }

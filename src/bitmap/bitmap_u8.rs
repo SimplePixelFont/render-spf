@@ -17,7 +17,7 @@ impl BitmapU8 {
     /// Create a new tightly-packed bitmap with all pixels cleared to 0.
     pub fn new(width: u8, height: u8) -> Self {
         let total_bits = width as usize * height as usize;
-        let length = (total_bits + 7) / 8;
+        let length = total_bits.div_ceil(8);
         Self { width, height, data: vec![0u8; length] }
     }
 
@@ -26,7 +26,7 @@ impl BitmapU8 {
     /// Returns an error if `data` is shorter than required for the given
     /// dimensions.
     pub fn from_data(width: u8, height: u8, data: Vec<u8>) -> Result<Self, &'static str> {
-        let expected = (width as usize * height as usize + 7) / 8;
+        let expected = (width as usize * height as usize).div_ceil(8);
         if data.len() < expected {
             return Err("Data too short for dimensions");
         }

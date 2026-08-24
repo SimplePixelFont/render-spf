@@ -16,8 +16,16 @@ mod full;
 #[cfg(feature = "std")]
 pub use full::*;
 
+#[cfg(feature = "std")]
+mod fragment;
+#[cfg(feature = "std")]
+pub use fragment::*;
+
 pub trait FontCache {
-    type Key;
+    /// Cloned into each [`PlacedGlyph`](crate::print::PlacedGlyph) so a
+    /// [`Placement`](crate::print::Placement) can be looked back up against
+    /// the cache without borrowing the original key slice.
+    type Key: Clone;
     type Glyph: RenderableTexture;
     type Surface: RenderSurface<Self::Glyph>;
 
@@ -177,14 +185,13 @@ pub(crate) fn populate_color_control(
 /// | true  | false | explicit table + positional index |
 /// | false | true  | explicit pixmap index, search all dep tables |
 /// | false | false | fully implicit — both by position |
-pub fn generic_update_cache<K, T, B>(
+pub fn generic_update_cache<T, B>(
     font_table: &FontTable,
     font: &Font,
     layout: &Layout,
     builder: &B,
     color_control: &mut ColorControl,
-    key_converter: impl Fn(&str) -> K,
-    mut inserter: impl FnMut(K, T),
+    mut inserter: impl FnMut(&str, T),
 ) where
     T: RenderableTexture,
     B: TextureBuilder<T>,
@@ -250,8 +257,7 @@ pub fn generic_update_cache<K, T, B>(
                 populate_color_control(color_control, pixmap_table, layout);
 
                 let texture = builder.build_texture(character, pixmap, pixmap_table, layout);
-                let key = key_converter(&character.code_points);
-                inserter(key, texture);
+                inserter(&character.code_points, texture);
             }
         }
     }

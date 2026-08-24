@@ -29,13 +29,15 @@ pub use utilities::*;
 pub mod print;
 pub use print::*;
 
-// color is std-only — the embedded backend is monochrome
-#[cfg(feature = "std")]
+pub mod shape;
+pub use shape::*;
+
 pub mod color;
-#[cfg(feature = "std")]
 pub use color::{ColorControl, ColorEntry, ColorType, PixelRef};
 
 pub mod cache;
-pub use cache::{find_font, font_names, FontCache, Printer, EmbeddedPrinter};
 #[cfg(feature = "std")]
-pub use cache::RgbaPrinter;
+pub use cache::{
+    composite_from, FragmentConfig, FragmentFlags, FragmentOutput, FragmentSet, RgbaPrinter,
+};
+pub use cache::{find_font, font_names, EmbeddedPrinter, FontCache, Printer};
